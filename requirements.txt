@@ -1,0 +1,6 @@
+# Tested together on Python 3.12 (3.10+ required: the code uses `X | None` types).
+fastapi==0.143.3
+fastmcp==4.1.0
+uvicorn==0.54.0
+boto3==1.43.114
+python-dotenv==1.2.4
