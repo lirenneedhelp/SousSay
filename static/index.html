@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alexa+ Talk Sous</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-white min-h-screen flex flex-col justify-between p-6">
+
+    <!-- Echo Show Header -->
+    <header class="flex justify-between items-center border-b border-slate-700 pb-4">
+        <div class="flex items-center space-x-3">
+            <div class="w-4 h-4 bg-cyan-400 rounded-full animate-pulse"></div>
+            <h1 class="text-xl font-bold tracking-wide">Alexa+ Kitchen Display</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+            <button id="new-session-btn" class="text-slate-500 hover:text-slate-300 text-xs underline">New session</button>
+            <span class="text-slate-400 text-sm" id="clock">12:00 PM</span>
+        </div>
+    </header>
+
+    <!-- Main Screen Display -->
+    <main class="my-auto max-w-3xl mx-auto w-full text-center space-y-6">
+        <div id="timer-alert" class="hidden bg-amber-500/15 border border-amber-400/60 text-amber-200 rounded-xl px-4 py-3 text-lg" role="alert"></div>
+
+        <div id="status" class="text-cyan-400 text-sm uppercase tracking-widest font-semibold">Ready</div>
+
+        <div class="bg-slate-800/80 rounded-2xl p-8 border border-slate-700 shadow-2xl backdrop-blur">
+            <p id="chef-response" class="text-2xl font-light leading-relaxed text-slate-100">
+                "Press the microphone, or type below, and ask me what we can cook today!"
+            </p>
+        </div>
+
+        <!-- Cooking progress -->
+        <div id="step-card" class="hidden text-left bg-slate-800/60 rounded-xl p-4 border border-slate-700">
+            <div class="flex justify-between text-xs text-slate-400">
+                <span id="recipe-title" class="font-semibold text-slate-200"></span>
+                <span id="step-count"></span>
+            </div>
+            <p id="step-text" class="mt-2 text-slate-100"></p>
+        </div>
+
+        <!-- Timers -->
+        <div id="timers" class="flex flex-wrap justify-center gap-3"></div>
+
+        <div id="tool-badge" class="hidden">
+            <span class="inline-block bg-slate-800 text-cyan-300 text-xs px-3 py-1 rounded-full border border-cyan-500/30">
+                ⚡ MCP tool: <span id="tool-name"></span>
+            </span>
+        </div>
+    </main>
+
+    <!-- Voice + text controls -->
+    <footer class="flex flex-col items-center gap-4 pb-4">
+        <button id="mic-btn" onclick="toggleListening()" class="bg-cyan-500 hover:bg-cyan-400 text-slate-950 p-6 rounded-full shadow-lg transition-all transform active:scale-95 disabled:opacity-50">
+            🎙️ <span id="mic-label" class="font-bold ml-2">Tap to Speak</span>
+        </button>
+        <form id="text-form" class="flex w-full max-w-xl gap-2">
+            <input id="text-input" type="text" maxlength="500" autocomplete="off" placeholder="Or type here, e.g. “I have chicken, rice and lemon”"
+                   class="flex-1 bg-slate-800 border border-slate-600 rounded-full px-5 py-3 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400">
+            <button id="send-btn" type="submit" class="bg-slate-700 hover:bg-slate-600 text-cyan-300 px-5 rounded-full disabled:opacity-50">Send</button>
+        </form>
+    </footer>
+
+    <script>
+        // ---- Session: generated once, kept in localStorage, sent with every request ----
+        const SESSION_RE = /^[A-Za-z0-9_-]{8,64}$/;
+        const newId = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+            : 'sess-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        let sessionId = newId();
+        try {
+            const saved = localStorage.getItem('talksous.session');
+            if (saved && SESSION_RE.test(saved)) sessionId = saved; else localStorage.setItem('talksous.session', sessionId);
+        } catch (e) { /* storage blocked: session lasts until reload */ }
+
+        const $ = (id) => document.getElementById(id);
+        let busy = false;
+
+        // ---- Clock ----
+        const tick = () => { $('clock').innerText = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); };
+        tick(); setInterval(tick, 1000);
+
+        // ---- Speech output (queue=true lets timer alerts wait for a reply instead of cutting it off) ----
+        function speakText(text, queue = false) {
+            if (!window.speechSynthesis) return;
+            if (!queue) window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function beep() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                [0, 0.35, 0.7].forEach((t) => {
+                    const osc = ctx.createOscillator(), gain = ctx.createGain();
+                    osc.frequency.value = 880; osc.connect(gain); gain.connect(ctx.destination);
+                    gain.gain.setValueAtTime(0.15, ctx.currentTime + t);
+                    osc.start(ctx.currentTime + t); osc.stop(ctx.currentTime + t + 0.2);
+                });
+            } catch (e) { /* audio not available */ }
+        }
+
+        // ---- Web Speech API input ----
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition;
+        let isListening = false;
+
+        function showProblem(status, message) {
+            $('status').innerText = status;
+            $('chef-response').innerText = message;
+        }
+
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onstart = () => {
+                isListening = true;
+                $('status').innerText = 'Listening...';
+                $('mic-label').innerText = 'Listening...';
+            };
+            recognition.onresult = async (event) => {
+                const transcript = event.results[0][0].transcript;
+                $('chef-response').innerText = `"${transcript}"`;
+                await sendToSousChef(transcript);
+            };
+            recognition.onerror = (event) => {
+                const messages = {
+                    'not-allowed': 'Microphone access is blocked. Allow it in your browser, or type below.',
+                    'service-not-allowed': 'Microphone access is blocked. Allow it in your browser, or type below.',
+                    'no-speech': "I didn't hear anything. Tap the mic and try again.",
+                    'audio-capture': 'I cannot find a microphone. You can type below instead.',
+                    'network': 'Speech recognition needs a network connection. You can type below instead.'
+                };
+                showProblem('Mic issue', messages[event.error] || `Voice input failed (${event.error}). You can type below instead.`);
+            };
+            recognition.onend = () => {
+                isListening = false;
+                $('mic-label').innerText = 'Tap to Speak';
+                if (!busy && $('status').innerText === 'Listening...') $('status').innerText = 'Ready';
+            };
+        }
+
+        function toggleListening() {
+            if (!recognition) {
+                showProblem('Voice unavailable', 'Voice input needs Chrome or Edge on localhost or HTTPS. You can type below instead.');
+                return;
+            }
+            if (busy) return;
+            try {
+                if (isListening) recognition.stop(); else recognition.start();
+            } catch (e) {
+                showProblem('Mic issue', 'Could not start the microphone. Try again, or type below.');
+            }
+        }
+
+        // ---- Text fallback ----
+        $('text-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = $('text-input').value.trim();
+            if (!text || busy) return;
+            $('text-input').value = '';
+            $('chef-response').innerText = `"${text}"`;
+            await sendToSousChef(text);
+        });
+
+        // ---- Chat ----
+        function setBusy(value) {
+            busy = value;
+            $('mic-btn').disabled = value;
+            $('send-btn').disabled = value;
+        }
+
+        async function sendToSousChef(userText) {
+            if (busy) return;
+            setBusy(true);
+            $('status').innerText = 'Processing...';
+            $('tool-badge').classList.add('hidden');
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: userText, session_id: sessionId})
+                });
+                let data = null;
+                try { data = await res.json(); } catch (e) { /* non-JSON error body */ }
+
+                if (!res.ok) {
+                    let message = 'Sorry, something went wrong. Please try again.';
+                    if (res.status === 429) message = 'That was a lot of requests. Give me a moment and try again.';
+                    else if (data && typeof data.detail === 'string') message = data.detail;
+                    showProblem('Error', message);
+                    return;
+                }
+
+                $('status').innerText = 'Alexa+ Speaking';
+                $('chef-response').innerText = data.response;
+                if (data.tools_called && data.tools_called.length) {
+                    $('tool-name').innerText = [...new Set(data.tools_called)].join(', ');
+                    $('tool-badge').classList.remove('hidden');
+                }
+                if (data.state) applyState(data.state);
+                speakText(data.response);
+            } catch (err) {
+                showProblem('Error', 'Sorry, I had trouble connecting to the backend.');
+            } finally {
+                setBusy(false);
+            }
+        }
+
+        // ---- Cooking panel: step + timers (deadlines are owned by the server) ----
+        let snapshot = {timers: [], at: Date.now()};
+
+        function applyState(state) {
+            const s = state.session;
+            const card = $('step-card');
+            if (s && s.recipe && s.status !== 'idle') {
+                card.classList.remove('hidden');
+                $('recipe-title').innerText = s.recipe.title + (s.recipe.ai_generated ? ' (AI-generated)' : '');
+                if (s.status === 'completed') {
+                    $('step-count').innerText = 'Finished';
+                    $('step-text').innerText = 'All done. Enjoy your meal!';
+                } else if (s.step) {
+                    $('step-count').innerText = `Step ${s.step.step_number} of ${s.step.total_steps}`;
+                    $('step-text').innerText = s.step.instruction;
+                }
+            } else {
+                card.classList.add('hidden');
+            }
+            snapshot = {timers: state.timers || [], at: Date.now()};
+            renderTimers();
+        }
+
+        const fmt = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+        function renderTimers() {
+            const elapsed = Math.floor((Date.now() - snapshot.at) / 1000);
+            const chips = snapshot.timers.map((t) => {
+                const expired = t.status === 'expired';
+                const chip = document.createElement('div');
+                chip.className = 'flex items-center gap-3 rounded-full px-4 py-2 border ' +
+                    (expired ? 'bg-amber-500/20 border-amber-400 text-amber-200 animate-pulse'
+                             : 'bg-slate-800 border-cyan-500/40 text-cyan-200');
+                const label = document.createElement('span');
+                label.textContent = t.label;
+                const time = document.createElement('span');
+                time.className = 'font-mono text-lg';
+                time.textContent = expired ? 'Done' : fmt(Math.max(0, t.remaining_s - elapsed));
+                chip.append(label, time);
+                if (expired) {
+                    const btn = document.createElement('button');
+                    btn.className = 'text-xs underline';
+                    btn.textContent = 'Dismiss';
+                    btn.onclick = () => dismissTimer(t.id);
+                    chip.append(btn);
+                }
+                return chip;
+            });
+            $('timers').replaceChildren(...chips);
+        }
+        setInterval(renderTimers, 1000);
+
+        async function dismissTimer(id) {
+            try {
+                await fetch('/api/timers/cancel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({session_id: sessionId, timer_id: id})
+                });
+            } catch (e) { /* the next poll will show the real state */ }
+            pollState();
+        }
+
+        let alertTimeout;
+        function announceExpiry(timer) {
+            const message = `Your ${timer.label} timer is done.`;
+            const banner = $('timer-alert');
+            banner.innerText = `⏰ ${message}`;
+            banner.classList.remove('hidden');
+            clearTimeout(alertTimeout);
+            alertTimeout = setTimeout(() => banner.classList.add('hidden'), 20000);
+            beep();
+            speakText(message, true);
+        }
+
+        // Poll the server; it computes expiry from stored deadlines and reports each expiry once.
+        let polling = false;
+        async function pollState() {
+            if (polling) return;
+            polling = true;
+            try {
+                const res = await fetch('/api/state?session_id=' + encodeURIComponent(sessionId));
+                if (!res.ok) return;
+                const data = await res.json();
+                applyState(data);
+                (data.newly_expired || []).forEach(announceExpiry);
+            } catch (e) { /* server unreachable: keep the last known state */ }
+            finally { polling = false; }
+        }
+        setInterval(pollState, 2000);
+        pollState();
+
+        $('new-session-btn').addEventListener('click', () => {
+            if (!confirm('Start a new cooking session? Your current recipe and timers will be left behind.')) return;
+            sessionId = newId();
+            try { localStorage.setItem('talksous.session', sessionId); } catch (e) { /* ignore */ }
+            $('chef-response').innerText = '"New session. What are we cooking?"';
+            $('tool-badge').classList.add('hidden');
+            snapshot = {timers: [], at: Date.now()};
+            $('step-card').classList.add('hidden');
+            renderTimers();
+        });
+    </script>
+</body>
+</html>
