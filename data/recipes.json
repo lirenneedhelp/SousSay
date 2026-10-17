@@ -1,0 +1,118 @@
+[
+ {"id":"lemon-soy-chicken","title":"Lemon Soy Chicken with Rice","time_min":55,"serves":2,"tags":["chicken","rice","asian"],
+  "ingredients":[{"name":"chicken breast","qty":"2 pieces"},{"name":"lemon","qty":"1"},{"name":"soy sauce","qty":"3 tbsp"},{"name":"ginger","qty":"1 tbsp grated"},{"name":"rice","qty":"1 cup"},{"name":"oil","qty":"1 tbsp"}],
+  "steps":[
+   {"text":"Mix the juice of the lemon, the soy sauce and the grated ginger. Add the chicken breast and turn to coat."},
+   {"text":"Cover and marinate in the refrigerator, not on the counter, for 30 minutes.","timer_s":1800,"timer_label":"chicken marinade"},
+   {"text":"Rinse the rice and cook it according to the package instructions.","timer_s":900,"timer_label":"rice"},
+   {"text":"Heat the oil in a pan over medium heat. Cook the chicken 6 to 7 minutes per side until the thickest part reads 165°F (74°C) on a meat thermometer. Discard the used marinade.","timer_s":780,"timer_label":"chicken cooking"},
+   {"text":"Rest the chicken for 3 minutes, slice, and serve over the rice."}],
+  "safety_notes":["Chicken must reach 165°F (74°C) in the thickest part.","Never reuse raw-chicken marinade as a sauce.","Wash hands, board and knife after handling raw chicken."]},
+
+ {"id":"garlic-herb-chicken-thighs","title":"Garlic Herb Roasted Chicken Thighs","time_min":50,"serves":2,"tags":["chicken","oven"],
+  "ingredients":[{"name":"chicken thighs","qty":"4 bone-in"},{"name":"garlic","qty":"4 cloves"},{"name":"olive oil","qty":"2 tbsp"},{"name":"thyme","qty":"1 tsp dried"},{"name":"lemon","qty":"1"}],
+  "steps":[
+   {"text":"Heat the oven to 425°F (220°C). Pat the chicken thighs dry."},
+   {"text":"Rub the thighs with olive oil, minced garlic, thyme, salt and pepper. Place skin side up on a tray."},
+   {"text":"Roast for 35 to 45 minutes, until the thickest part reads at least 165°F (74°C).","timer_s":2400,"timer_label":"roasting chicken"},
+   {"text":"Rest 5 minutes, squeeze lemon over the top, and serve."}],
+  "safety_notes":["Chicken must reach at least 165°F (74°C); thighs taste best around 175°F (80°C).","Wash hands and surfaces after touching raw chicken."]},
+
+ {"id":"garlic-chili-spaghetti","title":"Spaghetti Aglio e Olio","time_min":20,"serves":2,"tags":["pasta","vegetarian","quick"],
+  "ingredients":[{"name":"spaghetti","qty":"200 g"},{"name":"garlic","qty":"4 cloves"},{"name":"olive oil","qty":"4 tbsp"},{"name":"chili flakes","qty":"1/2 tsp"},{"name":"parsley","qty":"2 tbsp chopped"}],
+  "steps":[
+   {"text":"Boil the spaghetti in well-salted water until al dente, about 9 minutes. Save a cup of pasta water.","timer_s":540,"timer_label":"spaghetti"},
+   {"text":"Meanwhile, gently warm the olive oil with thinly sliced garlic and chili flakes over low heat until the garlic is pale gold."},
+   {"text":"Toss the drained pasta in the pan with a splash of pasta water until glossy."},
+   {"text":"Stir in the parsley and serve."}],
+  "safety_notes":["Keep garlic on low heat; it burns quickly and turns bitter."]},
+
+ {"id":"tomato-basil-pasta","title":"Simple Tomato Basil Pasta","time_min":25,"serves":2,"tags":["pasta","vegetarian"],
+  "ingredients":[{"name":"pasta","qty":"200 g"},{"name":"canned tomatoes","qty":"1 can (400 g)"},{"name":"garlic","qty":"2 cloves"},{"name":"olive oil","qty":"2 tbsp"},{"name":"basil","qty":"a handful"}],
+  "steps":[
+   {"text":"Boil the pasta in salted water until al dente.","timer_s":600,"timer_label":"pasta"},
+   {"text":"Warm the olive oil and sliced garlic in a pan for 1 minute, then add the canned tomatoes."},
+   {"text":"Simmer the sauce for 10 minutes, stirring now and then, and season with salt and pepper.","timer_s":600,"timer_label":"tomato sauce"},
+   {"text":"Toss the drained pasta in the sauce, tear in the basil, and serve."}],
+  "safety_notes":[]},
+
+ {"id":"egg-fried-rice","title":"Egg Fried Rice","time_min":15,"serves":2,"tags":["rice","egg","quick"],
+  "ingredients":[{"name":"cooked rice","qty":"2 cups, cold"},{"name":"eggs","qty":"2"},{"name":"soy sauce","qty":"2 tbsp"},{"name":"green onion","qty":"2"},{"name":"frozen peas","qty":"1/2 cup"},{"name":"oil","qty":"1 tbsp"}],
+  "steps":[
+   {"text":"Heat the oil in a wok or large pan over high heat."},
+   {"text":"Scramble the eggs until fully set, then push them to the side."},
+   {"text":"Add the cold rice and peas and stir-fry for 3 to 4 minutes until steaming hot all the way through.","timer_s":210,"timer_label":"stir fry"},
+   {"text":"Add the soy sauce and green onion, toss, and serve."}],
+  "safety_notes":["Use rice that was cooled within 1 hour of cooking and kept refrigerated; leftover rice left out can grow harmful bacteria.","Cook eggs until fully set."]},
+
+ {"id":"veggie-stir-fry","title":"Ginger Soy Veggie Stir-Fry","time_min":25,"serves":2,"tags":["vegan","rice","quick"],
+  "ingredients":[{"name":"broccoli","qty":"1 head"},{"name":"carrot","qty":"1"},{"name":"bell pepper","qty":"1"},{"name":"soy sauce","qty":"3 tbsp"},{"name":"garlic","qty":"2 cloves"},{"name":"ginger","qty":"1 tbsp"},{"name":"rice","qty":"1 cup"},{"name":"oil","qty":"1 tbsp"}],
+  "steps":[
+   {"text":"Cook the rice according to the package instructions.","timer_s":900,"timer_label":"rice"},
+   {"text":"Cut the broccoli, carrot and bell pepper into bite-size pieces."},
+   {"text":"Stir-fry the carrot and broccoli in hot oil for 4 minutes, then add the pepper, garlic and ginger for 2 minutes.","timer_s":360,"timer_label":"stir fry"},
+   {"text":"Add the soy sauce, toss for 1 minute, and serve over the rice."}],
+  "safety_notes":[]},
+
+ {"id":"shakshuka","title":"Shakshuka","time_min":30,"serves":2,"tags":["egg","vegetarian"],
+  "ingredients":[{"name":"eggs","qty":"4"},{"name":"canned tomatoes","qty":"1 can (400 g)"},{"name":"onion","qty":"1"},{"name":"bell pepper","qty":"1"},{"name":"cumin","qty":"1 tsp"},{"name":"paprika","qty":"1 tsp"},{"name":"olive oil","qty":"2 tbsp"}],
+  "steps":[
+   {"text":"Soften the sliced onion and pepper in olive oil over medium heat for 6 minutes.","timer_s":360,"timer_label":"onion and pepper"},
+   {"text":"Stir in the cumin and paprika for 30 seconds, then add the canned tomatoes and simmer 10 minutes.","timer_s":600,"timer_label":"tomato base"},
+   {"text":"Make four wells in the sauce and crack in the eggs. Cover and cook 6 to 8 minutes until the whites are fully set.","timer_s":420,"timer_label":"eggs"},
+   {"text":"Serve straight from the pan."}],
+  "safety_notes":["Cook eggs until the whites and yolks are firm if serving anyone vulnerable (young children, pregnant, elderly)."]},
+
+ {"id":"black-bean-quesadillas","title":"Black Bean Quesadillas","time_min":20,"serves":2,"tags":["vegetarian","quick"],
+  "ingredients":[{"name":"tortillas","qty":"4"},{"name":"black beans","qty":"1 can"},{"name":"cheese","qty":"1 cup shredded"},{"name":"onion","qty":"1/2"},{"name":"cumin","qty":"1/2 tsp"}],
+  "steps":[
+   {"text":"Drain the beans and mash them roughly with the cumin. Dice the onion."},
+   {"text":"Spread beans, onion and cheese over half of each tortilla and fold."},
+   {"text":"Toast in a dry pan over medium heat for 2 to 3 minutes per side until golden and the cheese has melted.","timer_s":150,"timer_label":"quesadilla side"},
+   {"text":"Cut into wedges and serve."}],
+  "safety_notes":[]},
+
+ {"id":"red-lentil-soup","title":"Red Lentil Soup","time_min":35,"serves":3,"tags":["vegan","soup"],
+  "ingredients":[{"name":"red lentils","qty":"1 cup"},{"name":"onion","qty":"1"},{"name":"carrot","qty":"1"},{"name":"garlic","qty":"2 cloves"},{"name":"vegetable broth","qty":"4 cups"},{"name":"cumin","qty":"1 tsp"},{"name":"olive oil","qty":"1 tbsp"}],
+  "steps":[
+   {"text":"Soften the diced onion and carrot in olive oil for 5 minutes, then add the garlic and cumin for 30 seconds."},
+   {"text":"Add the rinsed lentils and the broth, bring to a boil, then simmer 20 minutes until the lentils are soft.","timer_s":1200,"timer_label":"lentil soup"},
+   {"text":"Blend part of the soup for a creamy texture if you like, season, and serve."}],
+  "safety_notes":["Cool leftovers within 2 hours and refrigerate; reheat until steaming hot."]},
+
+ {"id":"ground-beef-taco-skillet","title":"Ground Beef Taco Skillet","time_min":30,"serves":3,"tags":["beef","rice"],
+  "ingredients":[{"name":"ground beef","qty":"400 g"},{"name":"onion","qty":"1"},{"name":"rice","qty":"1 cup"},{"name":"canned tomatoes","qty":"1 can"},{"name":"cumin","qty":"1 tsp"},{"name":"paprika","qty":"1 tsp"},{"name":"cheese","qty":"1/2 cup"}],
+  "steps":[
+   {"text":"Cook the rice according to the package instructions.","timer_s":900,"timer_label":"rice"},
+   {"text":"Brown the ground beef with the diced onion over medium-high heat, breaking it up, until no pink remains and it reaches 160°F (71°C).","timer_s":480,"timer_label":"browning beef"},
+   {"text":"Stir in cumin, paprika and the canned tomatoes and simmer 8 minutes.","timer_s":480,"timer_label":"taco sauce"},
+   {"text":"Serve over the rice and top with cheese."}],
+  "safety_notes":["Ground beef must reach 160°F (71°C).","Wash hands and tools after touching raw meat."]},
+
+ {"id":"lemon-garlic-salmon","title":"Lemon Garlic Salmon with Rice","time_min":30,"serves":2,"tags":["fish","rice"],
+  "ingredients":[{"name":"salmon fillets","qty":"2"},{"name":"lemon","qty":"1"},{"name":"garlic","qty":"2 cloves"},{"name":"rice","qty":"1 cup"},{"name":"butter","qty":"1 tbsp"}],
+  "steps":[
+   {"text":"Cook the rice according to the package instructions.","timer_s":900,"timer_label":"rice"},
+   {"text":"Pat the salmon dry and season with salt and pepper."},
+   {"text":"Melt the butter in a pan over medium heat with the minced garlic. Cook the salmon 4 minutes per side until it flakes and reads 145°F (63°C).","timer_s":480,"timer_label":"salmon"},
+   {"text":"Squeeze lemon over the salmon and serve with the rice."}],
+  "safety_notes":["Fish should reach 145°F (63°C) and flake easily.","Keep raw fish refrigerated until cooking."]},
+
+ {"id":"fluffy-pancakes","title":"Fluffy Pancakes","time_min":25,"serves":3,"tags":["breakfast","vegetarian"],
+  "ingredients":[{"name":"flour","qty":"1 1/2 cups"},{"name":"milk","qty":"1 1/4 cups"},{"name":"egg","qty":"1"},{"name":"baking powder","qty":"3 tsp"},{"name":"sugar","qty":"1 tbsp"},{"name":"butter","qty":"3 tbsp melted"}],
+  "steps":[
+   {"text":"Whisk the flour, baking powder, sugar and a pinch of salt in a bowl."},
+   {"text":"Whisk the milk, egg and melted butter, pour into the dry mix, and stir until just combined. Lumps are fine."},
+   {"text":"Rest the batter for 5 minutes.","timer_s":300,"timer_label":"batter rest"},
+   {"text":"Cook 1/4 cup scoops on a buttered pan over medium heat for 2 to 3 minutes per side until golden and cooked through."}],
+  "safety_notes":["Don't taste raw batter; it contains raw egg and flour."]},
+
+ {"id":"chickpea-coconut-curry","title":"Chickpea Coconut Curry","time_min":35,"serves":3,"tags":["vegan","rice"],
+  "ingredients":[{"name":"chickpeas","qty":"2 cans"},{"name":"coconut milk","qty":"1 can"},{"name":"onion","qty":"1"},{"name":"garlic","qty":"3 cloves"},{"name":"ginger","qty":"1 tbsp"},{"name":"curry powder","qty":"2 tbsp"},{"name":"canned tomatoes","qty":"1 can"},{"name":"rice","qty":"1 cup"}],
+  "steps":[
+   {"text":"Cook the rice according to the package instructions.","timer_s":900,"timer_label":"rice"},
+   {"text":"Soften the diced onion in oil for 5 minutes, then add the garlic, ginger and curry powder for 1 minute."},
+   {"text":"Add the tomatoes, coconut milk and drained chickpeas. Simmer 15 minutes until thickened.","timer_s":900,"timer_label":"curry"},
+   {"text":"Season with salt and serve over the rice."}],
+  "safety_notes":[]}
+]

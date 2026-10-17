@@ -1,0 +1,104 @@
+{
+ "general": "Keep cold food at or below 40°F (4°C) and hot food at or above 140°F (60°C). Do not leave perishable food out more than 2 hours, or 1 hour above 90°F (32°C). Refrigerate leftovers within 2 hours, reheat to 165°F (74°C). Thaw in the fridge, cold water or microwave, never on the counter.",
+ "entries": [
+  {
+   "keys": [
+    "chicken",
+    "turkey",
+    "poultry",
+    "duck"
+   ],
+   "temp_f": 165,
+   "temp_c": 74,
+   "rest": "none required",
+   "note": "Applies to whole, pieces and ground poultry.",
+   "cook": true
+  },
+  {
+   "keys": [
+    "ground beef",
+    "ground pork",
+    "ground lamb",
+    "burger",
+    "meatball",
+    "mince",
+    "sausage"
+   ],
+   "temp_f": 160,
+   "temp_c": 71,
+   "rest": "none required",
+   "note": "Ground poultry needs 165°F (74°C).",
+   "cook": true
+  },
+  {
+   "keys": [
+    "steak",
+    "beef",
+    "pork",
+    "lamb",
+    "veal",
+    "roast",
+    "chop"
+   ],
+   "temp_f": 145,
+   "temp_c": 63,
+   "rest": "3 minutes",
+   "note": "Whole cuts only; not ground meat.",
+   "cook": true
+  },
+  {
+   "keys": [
+    "fish",
+    "salmon",
+    "trout",
+    "cod",
+    "tuna",
+    "shrimp",
+    "prawn",
+    "seafood"
+   ],
+   "temp_f": 145,
+   "temp_c": 63,
+   "rest": "none required",
+   "note": "Fish should be opaque and flake easily.",
+   "cook": true
+  },
+  {
+   "keys": [
+    "egg",
+    "eggs",
+    "omelette",
+    "omelet",
+    "frittata",
+    "quiche"
+   ],
+   "temp_f": 160,
+   "temp_c": 71,
+   "rest": "none required",
+   "note": "Cook until whites and yolks are firm; egg dishes to 160°F (71°C).",
+   "cook": true
+  },
+  {
+   "keys": [
+    "leftover",
+    "leftovers",
+    "reheat",
+    "casserole"
+   ],
+   "temp_f": 165,
+   "temp_c": 74,
+   "rest": "none required",
+   "note": "Reheat until steaming hot throughout."
+  },
+  {
+   "keys": [
+    "rice",
+    "cooked rice"
+   ],
+   "temp_f": 165,
+   "temp_c": 74,
+   "rest": "none required",
+   "note": "Cool cooked rice within 1 hour and refrigerate; reheat until steaming hot."
+  }
+ ]
+}
