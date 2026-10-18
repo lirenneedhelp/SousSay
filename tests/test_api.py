@@ -1,17 +1,17 @@
 import json
+from dataclasses import replace
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient  # noqa: F401
 
 import cooking
 import main
-from conftest import SID, FakeBedrock, text, tools
+from conftest import SID, FakeBedrock, make_client, text, tools
 
 
 @pytest.fixture
 def client():
-    main._hits.clear()
-    with TestClient(main.app) as c:
+    with make_client() as c:
         yield c
 
 
@@ -114,7 +114,7 @@ def test_request_validation(client):
 
 def test_rate_limit(client, monkeypatch):
     use_bedrock(monkeypatch, [text("ok")], repeat_last=True)
-    monkeypatch.setattr(main, "RATE_LIMIT_PER_MIN", 2)
+    monkeypatch.setattr(main, "settings", replace(main.settings, chat_per_min=2))
     codes = [chat(client).status_code for _ in range(3)]
     assert codes == [200, 200, 429]
 
@@ -146,17 +146,16 @@ def test_timer_expiry_is_reported_once_by_state_endpoint(client, monkeypatch, cl
 
 
 def test_session_and_timers_survive_server_restart(monkeypatch, clock):
-    main._hits.clear()
     use_bedrock(monkeypatch, [tools(("start_recipe", {"recipe": "shakshuka"}), ("set_timer", {"label": "sauce", "minutes": 10})), text("ok")])
-    with TestClient(main.app) as c1:
+    with make_client() as c1:
         chat(c1)
     clock.advance(120)
-    with TestClient(main.app) as c2:  # brand-new app lifespan, same database file
+    with make_client() as c2:  # brand-new client and app lifespan, same cookie, same database file
         s = c2.get("/api/state", params={"session_id": SID, "pop_expired": False}).json()
     assert s["session"]["recipe"]["id"] == "shakshuka"
     assert s["timers"][0]["label"] == "sauce" and s["timers"][0]["remaining_s"] == 480
 
 
 def test_health_and_index(client):
-    assert client.get("/api/health").json() == {"ok": True}
+    assert client.get("/api/health").json() == {"status": "ok"}
     assert client.get("/").status_code == 200

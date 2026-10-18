@@ -7,11 +7,16 @@ ingredients you have, hands-free step-by-step cooking, and multiple named timers
 
     python -m venv venv && source venv/bin/activate
     pip install -r requirements.txt
-    cp .env.example .env        # add AWS credentials with Bedrock access to Amazon Nova Lite
+    cp .env.example .env        # set ACCESS_CODE; use an AWS profile/role for Bedrock (Nova Lite) access
     uvicorn main:app --port 8000
-    # open http://localhost:8000 in Chrome or Edge (speech recognition needs localhost or HTTPS)
+    # open http://localhost:8000 in Chrome or Edge, enter your ACCESS_CODE
+    # (speech recognition needs localhost or HTTPS)
 
-Check the MCP server over real Streamable HTTP (no AWS needed): `python bedrock_agent.py --smoke`
+The app will not start without `ACCESS_CODE` (and `SESSION_SECRET` in production). See `SECURITY.md` for the
+security model and `DEPLOY.md` for HTTPS deployment, IAM permissions and operations.
+
+Check the MCP server over real Streamable HTTP (no AWS needed): set `MCP_API_KEY` on the server, export the
+same value, then `python bedrock_agent.py --smoke`
 
 ## Tests
 
@@ -40,12 +45,7 @@ step for meat/poultry/fish/eggs, unsafe-practice blocklist) and always labelled.
 ## Known limits
 
 - Demo pantry is mocked (`cooking.MOCK_PANTRY`); there is no inventory editing.
-- No authentication. `/api/chat` has a per-IP rate limit and length cap, but anyone who can reach the
-  server can use your Bedrock quota, and `/mcp/` is open. Bind to localhost or put it behind auth/VPN
-  before exposing it. Behind a reverse proxy the rate limiter sees one IP.
-- Rate limit and Bedrock client are per-process; run a single worker.
-- `/mcp` (no trailing slash) redirects with 307; MCP clients should use `/mcp/`.
-- The Tailwind Play CDN needs internet on the demo device (fine for a demo, not for production).
+- One shared access code, not per-user accounts. Run a single worker. See `SECURITY.md` for remaining risks.
 - Timer alerts only fire while the page is open; background tabs may throttle polling and speech.
 
 ## Manual demo script (requires Bedrock)

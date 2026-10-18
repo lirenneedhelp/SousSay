@@ -10,6 +10,8 @@ import math
 import re
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 MIN_TIMER_S, MAX_TIMER_S, MAX_RUNNING_TIMERS = 1, 12 * 3600, 10
 MAX_GENERATED_PER_SESSION = 10
+MAX_SESSIONS_PER_PRINCIPAL = 100
 
 # Demo pantry (mock). Replace with a real inventory source later.
 MOCK_PANTRY = [
@@ -35,6 +38,24 @@ STAPLES = {"salt", "pepper", "black pepper", "water", "oil", "olive oil", "veget
 
 class CookingError(Exception):
     """An expected failure whose message is safe to show the model and the user."""
+
+
+class SessionNotFound(CookingError):
+    """Unknown session, or one owned by someone else (deliberately indistinguishable)."""
+
+
+# Who is calling. Set by the API layer (browser user) or the MCP layer (bearer-key client) and
+# checked on every session access. Unset means unauthenticated, and every access fails closed.
+_principal: ContextVar[str | None] = ContextVar("principal", default=None)
+
+
+@contextmanager
+def acting_as(principal: str):
+    token = _principal.set(principal)
+    try:
+        yield
+    finally:
+        _principal.reset(token)
 
 
 def _now() -> float:
@@ -88,12 +109,21 @@ def _mmss(seconds: int) -> str:
 def ensure_session(session_id: str) -> None:
     if not isinstance(session_id, str) or not SESSION_RE.match(session_id):
         raise CookingError("Invalid session id.")
+    principal = _principal.get()
+    if not principal:
+        raise SessionNotFound("Unknown session.")
     now = _now()
     with connect() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO sessions(id, created_at, updated_at) VALUES (?,?,?)",
-            (session_id, now, now),
-        )
+        inserted = conn.execute(
+            "INSERT OR IGNORE INTO sessions(id, owner, created_at, updated_at) VALUES (?,?,?,?)",
+            (session_id, principal, now, now),
+        ).rowcount == 1
+        if inserted and conn.execute("SELECT COUNT(*) FROM sessions WHERE owner=?", (principal,)).fetchone()[0] \
+                > MAX_SESSIONS_PER_PRINCIPAL:
+            raise CookingError("Too many sessions.")  # raising rolls the insert back
+        owner = conn.execute("SELECT owner FROM sessions WHERE id=?", (session_id,)).fetchone()["owner"]
+    if owner != principal:
+        raise SessionNotFound("Unknown session.")
 
 
 def _session(conn, session_id: str):
@@ -457,6 +487,7 @@ def cancel_timer(session_id: str, timer_id: int | None = None, label: str | None
 
 def pop_newly_expired(session_id: str) -> list:
     """Returns timers that expired and were not yet reported to the UI, and marks them reported."""
+    ensure_session(session_id)
     now = _now()
     with connect() as conn:
         _refresh(conn, session_id, now)
@@ -509,6 +540,7 @@ def add_messages(session_id: str, pairs: list) -> None:
 
 
 def load_history(session_id: str, limit: int = 10) -> list:
+    ensure_session(session_id)
     with connect() as conn:
         rows = conn.execute("SELECT role, text FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?",
                             (session_id, limit)).fetchall()

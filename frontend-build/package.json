@@ -1,0 +1,7 @@
+{
+  "name": "talksous-frontend-build",
+  "private": true,
+  "description": "Rebuilds static/app.css. Only needed if you change classes in static/index.html or static/app.js.",
+  "scripts": { "build": "tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify" },
+  "devDependencies": { "tailwindcss": "3.4.17" }
+}

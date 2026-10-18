@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+.git
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+frontend-build/
+tests/
+deploy/
+*.zip

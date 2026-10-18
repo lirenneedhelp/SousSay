@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeNovaLiteOnly",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel"],
+      "Resource": ["arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0"]
+    }
+  ]
+}

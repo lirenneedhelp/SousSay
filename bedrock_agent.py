@@ -3,7 +3,8 @@
     python bedrock_agent.py --smoke            # no AWS needed: lists tools, calls a few over real HTTP
     python bedrock_agent.py "what can I cook?"  # full Bedrock tool-calling loop (needs AWS credentials)
 
-The server must be running:  uvicorn main:app --port 8000
+The server must be running (uvicorn main:app --port 8000) with MCP_API_KEY set; export the same
+MCP_API_KEY here (or put it in .env). It is sent as `Authorization: Bearer ...`.
 """
 import asyncio
 import json
@@ -15,12 +16,13 @@ from fastmcp import Client
 
 load_dotenv()
 MCP_URL = os.getenv("MCP_URL", "http://localhost:8000/mcp/")
+MCP_API_KEY = os.getenv("MCP_API_KEY", "")
 MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 SESSION_ID = "cli-smoke-session"
 
 
 def result_text(result) -> str:
-    return "".join(c.text for c in result.content if hasattr(c, "text"))
+    return "".join(getattr(c, "text", "") for c in result.content)
 
 
 def to_bedrock_spec(tool) -> dict:
@@ -33,7 +35,7 @@ def to_bedrock_spec(tool) -> dict:
 
 
 async def smoke() -> None:
-    async with Client(MCP_URL) as client:
+    async with Client(MCP_URL, auth=MCP_API_KEY) as client:
         tools = await client.list_tools()
         print(f"{len(tools)} tools over Streamable HTTP:", ", ".join(t.name for t in tools))
         for name, args in [
@@ -50,7 +52,7 @@ async def agent(prompt: str) -> None:
     import boto3  # imported lazily so --smoke works without AWS
 
     bedrock = boto3.client("bedrock-runtime", region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
-    async with Client(MCP_URL) as client:
+    async with Client(MCP_URL, auth=MCP_API_KEY) as client:
         specs = [to_bedrock_spec(t) for t in await client.list_tools()]
         messages = [{"role": "user", "content": [{"text": prompt}]}]
         for _ in range(6):
@@ -71,6 +73,8 @@ async def agent(prompt: str) -> None:
 
 
 if __name__ == "__main__":
+    if not MCP_API_KEY:
+        sys.exit("Set MCP_API_KEY (the same value the server uses).")
     if "--smoke" in sys.argv:
         asyncio.run(smoke())
     else:

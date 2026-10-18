@@ -1,53 +1,74 @@
+import asyncio
 import copy
 import json
 import logging
 import os
 import re
-import time
-from typing import Any
-from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError, ConnectTimeoutError, NoCredentialsError, ReadTimeoutError
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastmcp import Client
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 import cooking
-from cooking import CookingError
-from db import init_db
+import db
+from cooking import CookingError, SessionNotFound
 from mcp_tools import mcp
+from security import (COOKIE_NAME, BodyLimitMiddleware, McpAuthMiddleware, RateLimiter, SecurityHeadersMiddleware,
+                      codes_match, issue_cookie, load_settings, origin_allowed, verify_cookie)
 
 load_dotenv()
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("talksous")
 BASE_DIR = Path(__file__).parent
 
+settings = load_settings()  # refuses to start without ACCESS_CODE (and SESSION_SECRET in production)
+limiter = RateLimiter()
+
 MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 MAX_TOOL_ITERATIONS = 6
-RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))
 SESSION_PATTERN = r"^[A-Za-z0-9_-]{8,64}$"
 
-bedrock = boto3.client("bedrock-runtime", region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+# Credentials come from the standard AWS provider chain (IAM role, profile, or environment), never from code.
+bedrock = boto3.client(
+    "bedrock-runtime",
+    region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+    config=Config(connect_timeout=5, read_timeout=30, retries={"max_attempts": 2, "mode": "standard"}),
+)
 
 # Self-hosted MCP server (Streamable HTTP) mounted at /mcp/. The chat endpoint below talks to the
 # SAME server through an in-memory client, so there is no HTTP hop to ourselves (no deadlock).
-mcp_app = mcp.http_app(transport="streamable-http", path="/")
+mcp_app = mcp.http_app(
+    transport="streamable-http", path="/",
+    allowed_hosts=list(settings.allowed_hosts), allowed_origins=list(settings.allowed_origins),
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    db.init_db()
     async with mcp_app.lifespan(app):
         yield
 
 
-app = FastAPI(lifespan=lifespan)
+# No interactive docs or OpenAPI schema in any environment: they would advertise every route.
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/mcp", mcp_app)
+# add_middleware stacks outward: TrustedHost runs first, then headers, body limit, MCP auth.
+app.add_middleware(McpAuthMiddleware, get_settings=lambda: settings, limiter=limiter)
+app.add_middleware(BodyLimitMiddleware, get_settings=lambda: settings)
+app.add_middleware(SecurityHeadersMiddleware, get_settings=lambda: settings)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 (BASE_DIR / "static").mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
@@ -70,17 +91,62 @@ Food safety: for any doneness, temperature, or storage question call food_safety
 
 
 # --------------------------------------------------------------------- helpers
-_hits: dict[str, deque] = defaultdict(deque)
+def client_ip(request: Request) -> str:
+    """Real client IP only if uvicorn was started with --proxy-headers behind a trusted proxy."""
+    return request.client.host if request.client else "unknown"
 
 
-def check_rate_limit(request: Request) -> None:
-    ip = request.client.host if request.client else "unknown"
-    now, window = time.monotonic(), _hits[ip]
-    while window and now - window[0] > 60:
-        window.popleft()
-    if len(window) >= RATE_LIMIT_PER_MIN:
-        raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
-    window.append(now)
+def require_user(request: Request) -> str:
+    """Authenticates the signed cookie and returns the caller's principal."""
+    client_id = verify_cookie(settings, request.cookies.get(COOKIE_NAME))
+    if not client_id:
+        raise HTTPException(status_code=401, detail="Please sign in.")
+    return f"u:{client_id}"
+
+
+def require_same_origin(request: Request) -> None:
+    if not origin_allowed(settings, request.headers.get("origin"), request.headers.get("host")):
+        raise HTTPException(status_code=403, detail="Cross-origin request blocked.")
+
+
+def too_many(detail: str = "Too many requests. Please slow down.") -> HTTPException:
+    return HTTPException(status_code=429, detail=detail, headers={"Retry-After": "30"})
+
+
+def to_http_error(exc: Exception) -> HTTPException:
+    """Maps any failure in a chat turn to a safe, useful response. Details go to the server log only."""
+    if isinstance(exc, SessionNotFound):
+        return HTTPException(status_code=404, detail="Unknown session.")
+    if isinstance(exc, CookingError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, asyncio.TimeoutError):
+        log.error("Chat turn timed out after %ss", settings.turn_timeout_s)
+        return HTTPException(status_code=504, detail="That took too long. Please try again.")
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        log.error("Bedrock error: %s", code or "unknown")
+        if code in ("ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"):
+            return too_many("The assistant is busy. Please try again in a moment.")
+        if code in ("AccessDeniedException", "ResourceNotFoundException", "ValidationException",
+                    "UnrecognizedClientException", "ExpiredTokenException", "UnauthorizedException"):
+            return HTTPException(status_code=503, detail="The assistant is not set up correctly. Please tell the host.")
+        if code == "ModelTimeoutException":
+            return HTTPException(status_code=504, detail="The assistant took too long. Please try again.")
+        return HTTPException(status_code=503, detail="The assistant is temporarily unavailable. Please try again.")
+    if isinstance(exc, NoCredentialsError):
+        log.error("Bedrock call failed: no AWS credentials found")
+        return HTTPException(status_code=503, detail="The assistant is not set up correctly. Please tell the host.")
+    if isinstance(exc, (ReadTimeoutError, ConnectTimeoutError)):
+        log.error("Bedrock call timed out: %s", type(exc).__name__)
+        return HTTPException(status_code=504, detail="The assistant took too long. Please try again.")
+    if isinstance(exc, (KeyError, TypeError, IndexError)):
+        log.exception("Unusable model response")
+        return HTTPException(status_code=502, detail="The assistant gave an unusable answer. Please try again.")
+    if isinstance(exc, BotoCoreError):
+        log.error("Bedrock transport error: %s", type(exc).__name__)
+        return HTTPException(status_code=503, detail="The assistant is temporarily unavailable. Please try again.")
+    log.exception("Unexpected chat failure")
+    return HTTPException(status_code=502, detail="Something went wrong. Please try again.")
 
 
 def _simplify_schema(node: Any) -> Any:
@@ -197,57 +263,99 @@ async def serve_ui():
     index_path = BASE_DIR / "static" / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="static/index.html not found.")
-    return FileResponse(index_path)
+    return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/health")
-def health():
+async def health():
+    """Liveness plus a database check. Reveals nothing about configuration or infrastructure."""
+    try:
+        ok = await run_in_threadpool(db.ping)
+    except Exception:
+        log.exception("Health check failed")
+        ok = False
+    return JSONResponse({"status": "ok" if ok else "degraded"}, status_code=200 if ok else 503)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
+    code: str = Field(min_length=1, max_length=128)
+
+
+@app.post("/api/login", dependencies=[Depends(require_same_origin)])
+async def login(req: LoginRequest, request: Request, response: Response):
+    if not limiter.allow(f"login:{client_ip(request)}", settings.login_per_min):
+        raise too_many("Too many sign-in attempts. Wait a minute and try again.")
+    if not codes_match(req.code, settings.access_code):
+        raise HTTPException(status_code=401, detail="Incorrect access code.")
+    response.set_cookie(COOKIE_NAME, issue_cookie(settings), max_age=settings.cookie_ttl_s, httponly=True,
+                        secure=settings.cookie_secure, samesite="strict", path="/")
+    return {"ok": True}
+
+
+@app.post("/api/logout", dependencies=[Depends(require_same_origin)])
+async def logout(response: Response):
+    response.delete_cookie(COOKIE_NAME, path="/", httponly=True, secure=settings.cookie_secure, samesite="strict")
     return {"ok": True}
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     message: str = Field(min_length=1, max_length=500)
     session_id: str = Field(pattern=SESSION_PATTERN)
 
 
-@app.post("/api/chat")
-async def chat_endpoint(req: ChatRequest, request: Request):
-    check_rate_limit(request)
-    if not req.message.strip():
+@app.post("/api/chat", dependencies=[Depends(require_same_origin)])
+async def chat_endpoint(req: ChatRequest, request: Request, principal: str = Depends(require_user)):
+    # Model calls are the expensive, abusable operation: limit per user, per IP, and globally per hour.
+    if not (limiter.allow(f"chat:{principal}", settings.chat_per_min)
+            and limiter.allow(f"chat-ip:{client_ip(request)}", settings.chat_per_min * 3)):
+        raise too_many()
+    if not limiter.allow("chat-global", settings.global_chat_per_hour, 3600):
+        raise too_many("The demo has reached its hourly limit. Please try again later.")
+    message = req.message.strip()
+    if not message:
         raise HTTPException(status_code=422, detail="Message is empty.")
     try:
-        reply, tools_called = await run_turn(req.session_id, req.message.strip())
-    except CookingError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception:
-        log.exception("chat failed")
-        raise HTTPException(status_code=502, detail="The assistant is unavailable right now. Please try again.")
+        with cooking.acting_as(principal):
+            reply, tools_called = await asyncio.wait_for(run_turn(req.session_id, message), settings.turn_timeout_s)
+            state = cooking.get_state(req.session_id)
+    except Exception as exc:
+        raise to_http_error(exc)
     return {
         "response": reply,
         "tool_called": tools_called[-1] if tools_called else None,
         "tools_called": tools_called,
-        "state": cooking.get_state(req.session_id),
+        "state": state,
     }
 
 
 @app.get("/api/state")
-def state_endpoint(session_id: str = Query(pattern=SESSION_PATTERN), pop_expired: bool = True):
+def state_endpoint(session_id: str = Query(pattern=SESSION_PATTERN), pop_expired: bool = True,
+                   principal: str = Depends(require_user)):
     """Polled by the UI. Timer expiry is computed from stored deadlines on every read, and each
     expiry is reported once in `newly_expired`."""
+    if not limiter.allow(f"state:{principal}", settings.state_per_min):
+        raise too_many()
     try:
-        return cooking.get_state(session_id, pop_expired=pop_expired)
-    except CookingError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        with cooking.acting_as(principal):
+            return cooking.get_state(session_id, pop_expired=pop_expired)
+    except Exception as exc:
+        raise to_http_error(exc)
 
 
 class DismissRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     session_id: str = Field(pattern=SESSION_PATTERN)
-    timer_id: int
+    timer_id: int = Field(ge=1, le=2**62)
 
 
-@app.post("/api/timers/cancel")
-def cancel_timer_endpoint(req: DismissRequest):
+@app.post("/api/timers/cancel", dependencies=[Depends(require_same_origin)])
+def cancel_timer_endpoint(req: DismissRequest, principal: str = Depends(require_user)):
+    if not limiter.allow(f"cancel:{principal}", 60):
+        raise too_many()
     try:
-        return cooking.cancel_timer(req.session_id, timer_id=req.timer_id)
-    except CookingError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        with cooking.acting_as(principal):
+            return cooking.cancel_timer(req.session_id, timer_id=req.timer_id)
+    except Exception as exc:
+        raise to_http_error(exc)

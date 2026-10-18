@@ -1,12 +1,13 @@
 """The single definition of every tool. The MCP server exposes these over Streamable HTTP, and
 the chat endpoint calls the very same server through an in-memory MCP client, so there is one
-schema and one execution path.
+schema and one execution path. Access to the HTTP endpoint requires the MCP bearer key.
 
 `session_id` is a parameter on every tool so external MCP clients can use them, but the chat
 endpoint strips it from the schema shown to the model and injects the real value itself."""
 import json
 
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 
 import cooking
 from cooking import CookingError
@@ -14,8 +15,27 @@ from cooking import CookingError
 mcp = FastMCP("TalkSous")
 
 
-def _run(fn, *args, **kwargs) -> str:
+MCP_CLIENT_PRINCIPAL = "mcp"
+
+
+def _over_http() -> bool:
+    """True when this call arrived on the HTTP endpoint (which McpAuthMiddleware has already authenticated)."""
     try:
+        get_http_request()
+        return True
+    except RuntimeError:
+        return False
+
+
+def _run(fn, *args, **kwargs) -> str:
+    """Runs a service function as the right principal and returns JSON.
+    - HTTP callers act as the single 'mcp' principal and can only touch sessions it created.
+    - In-process callers (our chat endpoint) inherit the signed-in browser user's principal from the
+      request context; with no principal at all, cooking.ensure_session refuses (fail closed)."""
+    try:
+        if _over_http():
+            with cooking.acting_as(MCP_CLIENT_PRINCIPAL):
+                return json.dumps(fn(*args, **kwargs))
         return json.dumps(fn(*args, **kwargs))
     except CookingError as e:
         return json.dumps({"error": str(e)})

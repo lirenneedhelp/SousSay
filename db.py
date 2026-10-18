@@ -6,6 +6,7 @@ from contextlib import contextmanager
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
+    owner TEXT,                                   -- principal that created the session
     recipe_id TEXT,
     recipe_json TEXT,
     step_index INTEGER NOT NULL DEFAULT 0,
@@ -70,3 +71,20 @@ def connect():
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # Migrate databases created before ownership existed. Their sessions keep owner NULL,
+        # which matches no principal, so they become inaccessible rather than shared.
+        columns = [r["name"] for r in conn.execute("PRAGMA table_info(sessions)")]
+        if "owner" not in columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN owner TEXT")
+    try:  # the database holds user data: owner read/write only
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(db_path() + suffix):
+                os.chmod(db_path() + suffix, 0o600)
+    except OSError:
+        pass
+
+
+def ping() -> bool:
+    """Cheap liveness check for the health endpoint."""
+    with connect() as conn:
+        return conn.execute("SELECT 1").fetchone()[0] == 1

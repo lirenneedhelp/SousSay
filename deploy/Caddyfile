@@ -1,0 +1,7 @@
+# Caddy obtains and renews the HTTPS certificate automatically for {$DOMAIN}.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:8000 {
+		flush_interval -1   # do not buffer MCP streaming responses
+	}
+}

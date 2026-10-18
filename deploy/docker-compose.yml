@@ -1,0 +1,29 @@
+# Run from the deploy/ directory:  DOMAIN=demo.example.com docker compose up -d --build
+# (or put DOMAIN=... in deploy/.env). The app port is NOT published; only Caddy (80/443) is reachable.
+services:
+  app:
+    build: ..
+    env_file: ../.env              # ACCESS_CODE, SESSION_SECRET, MCP_API_KEY, region ... (never baked into the image)
+    environment:
+      APP_ENV: production
+      ALLOWED_HOSTS: ${DOMAIN:?set DOMAIN},127.0.0.1   # 127.0.0.1 keeps the container health check working
+      TALKSOUS_DB: /data/talksous.db
+    volumes:
+      - talksous-data:/data
+    restart: unless-stopped
+    expose: ["8000"]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [app]
+volumes:
+  talksous-data:
+  caddy-data:
+  caddy-config:
