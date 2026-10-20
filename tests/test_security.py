@@ -333,7 +333,7 @@ def test_rejected_requests_do_not_consume_model_budget(monkeypatch):
 
 
 # ============================================================ Bedrock failure handling
-def client_error(code, message="Rate exceeded for arn:aws:bedrock:us-east-1:123456789012:foundation-model/x"):
+def client_error(code, message="Rate exceeded for arn:aws:bedrock:ap-southeast-1:123456789012:foundation-model/x"):
     return ClientError({"Error": {"Code": code, "Message": message}}, "Converse")
 
 
@@ -345,7 +345,7 @@ def client_error(code, message="Rate exceeded for arn:aws:bedrock:us-east-1:1234
     (client_error("ModelTimeoutException"), 504, "too long"),
     (client_error("ServiceUnavailableException"), 503, "temporarily unavailable"),
     (NoCredentialsError(), 503, "not set up correctly"),
-    (ReadTimeoutError(endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com"), 504, "too long"),
+    (ReadTimeoutError(endpoint_url="https://bedrock-runtime.ap-southeast-1.amazonaws.com"), 504, "too long"),
     (RuntimeError("boom: secret-token-123"), 502, "Something went wrong"),
 ])
 def test_bedrock_failures_become_safe_actionable_errors(monkeypatch, caplog, exc, status, phrase):

@@ -27,7 +27,7 @@ Tests: `pip install -r requirements-dev.txt && pytest`. UI assets: only if you c
 
 ## AWS: Bedrock configuration and permissions
 
-1. Region: set `AWS_DEFAULT_REGION` (default `us-east-1`). Confirm `amazon.nova-lite-v1:0` is available to your
+1. Region: set `AWS_DEFAULT_REGION` (default `ap-southeast-1`). Confirm `amazon.nova-lite-v1:0` is available to your
    account in that region (Bedrock console, Model catalog / Model access). If you change `BEDROCK_MODEL_ID`,
    update the policy below. Using a cross-region inference profile (e.g. `us.amazon...`) also needs that profile's
    ARN and the underlying model ARNs in the policy.
