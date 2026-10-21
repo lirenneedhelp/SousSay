@@ -485,7 +485,7 @@ def cancel_timer(session_id: str, timer_id: int | None = None, label: str | None
     return {"status": "timer_cancelled", "timer": {"id": hits[0]["id"], "label": hits[0]["label"]}}
 
 
-def _spoken_duration(seconds: int) -> str:
+def spoken_duration(seconds: int) -> str:
     minutes, secs = divmod(int(seconds), 60)
     parts = []
     if minutes:
@@ -495,12 +495,53 @@ def _spoken_duration(seconds: int) -> str:
     return " and ".join(parts)
 
 
+_WORD_NUM = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+                                        "fourteen fifteen sixteen seventeen eighteen nineteen".split())}
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+_NUM_RE = (r"\d+(?:\.\d+)?|(?:" + "|".join(_TENS) + r")(?:[\s-](?:one|two|three|four|five|six|seven|eight|nine))?|"
+           + "|".join(_WORD_NUM) + r"|an?|half")
+_DURATION = re.compile(rf"\b({_NUM_RE})[\s-]*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b", re.I)
+_UNIT_SECONDS = {"h": 3600, "m": 60, "s": 1}
+
+
+def _to_number(token: str) -> float:
+    t = token.lower().replace("-", " ").strip()
+    if t in ("a", "an"):
+        return 1.0
+    if t == "half":
+        return 0.5
+    try:
+        return float(t)
+    except ValueError:
+        return float(sum(_TENS.get(p, _WORD_NUM.get(p, 0)) for p in t.split()))
+
+
+def parse_set_timer(text: str) -> tuple[str, int] | None:
+    """Understands plain single-timer requests ("set an 8 minute timer for eggs") so they never depend on the
+    model remembering to call a tool. Returns (label, seconds), or None to let the model handle anything else."""
+    t = re.sub(r"\b(?:an?|one) hour and a half\b|\b(?:an?|one) and a half hours?\b", "90 minutes", text, flags=re.I)
+    t = re.sub(r"\bhalf an? hour\b|\ba half[- ]hour\b|\bhalf[- ]hour\b", "30 minutes", t, flags=re.I)
+    if not re.search(r"\b(set|start|make|create|begin|put|add)\b", t, re.I):
+        return None
+    if re.search(r"\b(should|what|why|when|how|which)\b|\btimers\b", t, re.I) or len(re.findall(r"\btimer\b", t, re.I)) != 1:
+        return None
+    matches = list(_DURATION.finditer(t))
+    if not matches:
+        return None
+    seconds = round(sum(_to_number(m.group(1)) * _UNIT_SECONDS[m.group(2)[0].lower()] for m in matches))
+    rest = re.sub(r"\s+", " ", re.sub(r"\b(for|on|of|in)\s+(?=(?:for|on|of|in|called|named|labell?ed)\b)", "", _DURATION.sub(" ", t), flags=re.I)).strip()
+    found = re.findall(r"\b(?:for|called|named|labell?ed|on)\s+(?:(?:the|my|some|a|an)\s+)?([a-z][a-z' -]*)", rest, flags=re.I)
+    label = re.sub(r"\b(please|now|thanks|thank you|for me)\b.*$", "", found[-1] if found else "", flags=re.I)
+    label = re.sub(r"\s+(for|on|of|in|to)$", "", label.strip(" -'").lower())[:40]  # drop a dangling preposition
+    return (label if label and label != "timer" else "kitchen"), seconds
+
+
 def describe_timers(session_id: str) -> str:
     """Answers "what timers do I have / how long is left" from the database, never from the model."""
     timers = list_timers(session_id)["timers"]
     if not timers:
         return "You don't have any timers running."
-    parts = [f"{t['label']} is done" if t["status"] == "expired" else f"{t['label']} has {_spoken_duration(t['remaining_s'])} left"
+    parts = [f"{t['label']} is done" if t["status"] == "expired" else f"{t['label']} has {spoken_duration(t['remaining_s'])} left"
              for t in timers]
     head = "You have one timer: " if len(parts) == 1 else f"You have {len(parts)} timers: "
     return head + "; ".join(parts) + "."

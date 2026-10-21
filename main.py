@@ -268,6 +268,16 @@ async def run_turn(session_id: str, user_text: str) -> tuple[str, list[str]]:
         reply = cooking.describe_timers(session_id)
         cooking.add_messages(session_id, [("user", user_text), ("assistant", reply)])
         return reply, []
+    parsed = cooking.parse_set_timer(user_text)
+    if parsed:  # plain "set a N minute timer for X": the app does it directly; no model, no way to skip the tool
+        label, seconds = parsed
+        try:
+            cooking.set_timer(session_id, label, seconds=seconds)
+            reply = f"Okay, {label} timer set for {cooking.spoken_duration(seconds)}."
+        except CookingError as e:
+            reply = f"I couldn't start that timer. {e}"
+        cooking.add_messages(session_id, [("user", user_text), ("assistant", reply)])
+        return reply, []
     messages = cooking.load_history(session_id) + [{"role": "user", "content": [{"text": user_text}]}]
     system = [{"text": SYSTEM_PROMPT + "\n\n" + cooking.state_summary(session_id)}]
     tools = await get_bedrock_tools()
