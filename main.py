@@ -87,6 +87,8 @@ Workflow:
 - Use list_timers to report remaining time and cancel_timer to cancel or dismiss one. Several timers can run at once.
 - Questions during cooking: answer from the state and the recipe. If the user interrupts ("hold on", "the phone is ringing"), do not advance; say you will wait. Timers keep running.
 
+Timers: never say you set, started, cancelled, or have a timer unless a tool result in this turn confirmed it or the state block lists it. Earlier conversation messages may be wrong about timers; the state block is the truth. To start a timer you must call set_timer; to cancel one you must call cancel_timer.
+
 Food safety: for any doneness, temperature, or storage question call food_safety_lookup instead of guessing. Never suggest undercooked poultry or ground meat, or leaving perishable food out more than 2 hours. If a tool returns an error, say so briefly in plain words and do not make up a result. If unsure, say so and suggest checking USDA guidance."""
 
 
@@ -124,7 +126,9 @@ def to_http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=504, detail="That took too long. Please try again.")
     if isinstance(exc, ClientError):
         code = exc.response.get("Error", {}).get("Code", "")
-        log.error("Bedrock error: %s", code or "unknown")
+        # The message explains the cause (bad model id, region, malformed request). It is logged server-side
+        # only, truncated; users still just see the generic response.
+        log.error("Bedrock error: %s: %s", code or "unknown", str(exc.response.get("Error", {}).get("Message", ""))[:300])
         if code in ("ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"):
             return too_many("The assistant is busy. Please try again in a moment.")
         if code in ("AccessDeniedException", "ResourceNotFoundException", "ValidationException",
@@ -215,6 +219,42 @@ async def execute_tool(client: Client, tool_use: dict, session_id: str, known: s
                                "content": [{"text": '{"error": "The tool failed unexpectedly."}'}]}}
 
 
+_COMMAND = re.compile(r"\b(set|start|cancel|stop|delete|remove|dismiss|add|create|make|reset|pause|need|should|recommend|suggest|recipe)\b"
+                      r"|\d+\s*(min|sec|hour|hr)|\b(an?|one|two|three|five|ten|fifteen|twenty|thirty)\s+(\w+\s+)?(minutes?|seconds?|hours?)\b", re.I)
+_TIMER_STATUS = re.compile(
+    r"\b(do|did|have) i (still )?have\b[^.?!]*\btimers?\b|\b(what|which|any)\b[^.?!]*\btimers?\b"
+    r"|\bwhere('?s| is| are)\b[^.?!]*\btimers?\b|\b(check|status of|list|show)\b[^.?!]*\btimers?\b"
+    r"|\b(is|are)\b[^.?!]*\btimers?\b[^.?!]*\b(running|done|going|ready|still|finished)\b"
+    r"|\bhow (much|long)\b[^.?!]*\b(left|longer|remaining)\b|\btime (left|remaining)\b", re.I)
+
+
+def is_timer_status_query(text: str) -> bool:
+    """'Do I have any timers?' / 'how long left?' are answered from the database, not by the model."""
+    return bool(_TIMER_STATUS.search(text)) and not _COMMAND.search(text)
+
+
+_OFFER = re.compile(r"\?|\b(would you like|want me to|shall i|should i|do you want)\b", re.I)
+_SET_CLAIM = re.compile(r"\b(i['’]?ve|i have|i|just|already)\s+(set|started|created)\b[^.?!]{0,60}\btimer"
+                        r"|\btimer\b[^.?!]{0,40}\b(is|has been|was|'s)\s+(now\s+)?(set|started|running)\b"
+                        r"|\b(setting|starting)\s+(a|the|your)\b[^.?!]{0,30}\btimer", re.I)
+_CANCEL_CLAIM = re.compile(r"\b(i['’]?ve|i have|i)\s+(cancel+ed|stopped|dismissed|removed)\b[^.?!]{0,40}\btimer"
+                           r"|\btimer\b[^.?!]{0,40}\b(is|has been|was)\s+(now\s+)?(cancel+ed|stopped|dismissed|removed)\b", re.I)
+
+
+def guard_unbacked_claims(reply: str, ok_tools: set[str]) -> str:
+    """The model sometimes says it did something it never did. If it claims to have set or cancelled a timer
+    without a successful tool call this turn, replace the claim with an honest message."""
+    if _OFFER.search(reply):
+        return reply
+    if _SET_CLAIM.search(reply) and "set_timer" not in ok_tools:
+        log.warning("Replaced an unbacked 'timer set' claim")
+        return "I couldn't start that timer. Please say it again with a name and a length, like: set a 15 minute timer for rice."
+    if _CANCEL_CLAIM.search(reply) and "cancel_timer" not in ok_tools:
+        log.warning("Replaced an unbacked 'timer cancelled' claim")
+        return "I couldn't cancel that timer. Say which one, like: cancel the rice timer."
+    return reply
+
+
 def clean_spoken_text(raw: str) -> str:
     text = re.sub(r"<thinking>.*?</thinking>", "", raw, flags=re.DOTALL)
     text = re.sub(r"</?thinking>", "", text)
@@ -224,11 +264,16 @@ def clean_spoken_text(raw: str) -> str:
 
 async def run_turn(session_id: str, user_text: str) -> tuple[str, list[str]]:
     cooking.ensure_session(session_id)
+    if is_timer_status_query(user_text):
+        reply = cooking.describe_timers(session_id)
+        cooking.add_messages(session_id, [("user", user_text), ("assistant", reply)])
+        return reply, []
     messages = cooking.load_history(session_id) + [{"role": "user", "content": [{"text": user_text}]}]
     system = [{"text": SYSTEM_PROMPT + "\n\n" + cooking.state_summary(session_id)}]
     tools = await get_bedrock_tools()
     known = {t["toolSpec"]["name"] for t in tools}
     tools_called: list[str] = []
+    ok_tools: set[str] = set()
     reply = "Sorry, that took too many steps. Could you say it again?"
 
     async with Client(mcp) as client:
@@ -251,8 +296,11 @@ async def run_turn(session_id: str, user_text: str) -> tuple[str, list[str]]:
             for tool_use in tool_uses:  # every toolUse needs a matching toolResult in one user message
                 tools_called.append(tool_use.get("name", "?"))
                 results.append(await execute_tool(client, tool_use, session_id, known))
+                if results[-1]["toolResult"]["status"] == "success":
+                    ok_tools.add(str(tool_use.get("name")))
             messages.append({"role": "user", "content": results})
 
+    reply = guard_unbacked_claims(reply, ok_tools)
     cooking.add_messages(session_id, [("user", user_text), ("assistant", reply)])
     return reply, tools_called
 

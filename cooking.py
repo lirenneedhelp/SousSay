@@ -485,6 +485,27 @@ def cancel_timer(session_id: str, timer_id: int | None = None, label: str | None
     return {"status": "timer_cancelled", "timer": {"id": hits[0]["id"], "label": hits[0]["label"]}}
 
 
+def _spoken_duration(seconds: int) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    parts = []
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if secs or not minutes:
+        parts.append(f"{secs} second{'s' if secs != 1 else ''}")
+    return " and ".join(parts)
+
+
+def describe_timers(session_id: str) -> str:
+    """Answers "what timers do I have / how long is left" from the database, never from the model."""
+    timers = list_timers(session_id)["timers"]
+    if not timers:
+        return "You don't have any timers running."
+    parts = [f"{t['label']} is done" if t["status"] == "expired" else f"{t['label']} has {_spoken_duration(t['remaining_s'])} left"
+             for t in timers]
+    head = "You have one timer: " if len(parts) == 1 else f"You have {len(parts)} timers: "
+    return head + "; ".join(parts) + "."
+
+
 def pop_newly_expired(session_id: str) -> list:
     """Returns timers that expired and were not yet reported to the UI, and marks them reported."""
     ensure_session(session_id)
