@@ -16,7 +16,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import units
 from db import connect
+from units import norm as _norm
+from units import tokens_match as _tokens_match
 
 DATA_DIR = Path(__file__).parent / "data"
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -25,14 +28,6 @@ MIN_TIMER_S, MAX_TIMER_S, MAX_RUNNING_TIMERS = 1, 12 * 3600, 10
 MAX_GENERATED_PER_SESSION = 10
 MAX_SESSIONS_PER_PRINCIPAL = 100
 
-# Demo pantry (mock). Replace with a real inventory source later.
-MOCK_PANTRY = [
-    {"item": "chicken breast", "quantity": 2, "unit": "pieces"},
-    {"item": "lemon", "quantity": 0.5, "unit": "pieces"},
-    {"item": "rice", "quantity": 500, "unit": "grams"},
-    {"item": "soy sauce", "quantity": 200, "unit": "ml"},
-    {"item": "ginger", "quantity": 1, "unit": "root"},
-]
 STAPLES = {"salt", "pepper", "black pepper", "water", "oil", "olive oil", "vegetable oil", "cooking oil"}
 
 
@@ -58,6 +53,14 @@ def acting_as(principal: str):
         _principal.reset(token)
 
 
+def current_principal() -> str:
+    """The authenticated caller (browser user or MCP client); refuses when there is none."""
+    principal = _principal.get()
+    if not principal:
+        raise SessionNotFound("Unknown session.")
+    return principal
+
+
 def _now() -> float:
     return time.time()  # tests patch this
 
@@ -80,26 +83,6 @@ def _safety() -> dict:
 
 
 # ------------------------------------------------------------------- text utils
-def _norm_word(w: str) -> str:
-    if w.endswith("ies") and len(w) > 4:
-        return w[:-3] + "y"
-    if w.endswith("oes") and len(w) > 4:
-        return w[:-2]
-    if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
-        return w[:-1]
-    return w
-
-
-def _norm(text: str) -> str:
-    text = re.sub(r"[^a-z0-9 ]+", " ", str(text).lower().replace("-", " "))
-    return " ".join(_norm_word(w) for w in text.split())
-
-
-def _tokens_match(a: str, b: str) -> bool:
-    ta, tb = set(_norm(a).split()), set(_norm(b).split())
-    return bool(ta and tb) and (ta <= tb or tb <= ta)
-
-
 def _mmss(seconds: int) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m}:{s:02d}"
@@ -137,6 +120,24 @@ def _recipe_of(row) -> dict | None:
     return json.loads(row["recipe_json"]) if row["recipe_json"] else None
 
 
+def ingredient_amount(ing: dict) -> tuple[float | None, str | None]:
+    if ing.get("amount") is not None:
+        return float(ing["amount"]), ing.get("unit") or "piece"
+    return units.parse_quantity(str(ing.get("qty") or ""), ing["name"])
+
+
+def session_scale(row, recipe: dict) -> float:
+    return (row["servings"] or recipe["serves"]) / recipe["serves"]
+
+
+def format_ingredients(recipe: dict, scale: float, system: str) -> list[str]:
+    lines = []
+    for ing in recipe["ingredients"]:
+        amount, unit = ingredient_amount(ing)
+        lines.append(units.format_item(ing["name"], amount * scale, unit, system) if amount is not None else ing["name"])
+    return lines
+
+
 def _step_payload(recipe: dict, idx: int, adaptations: list) -> dict:
     step = recipe["steps"][idx]
     payload = {
@@ -161,16 +162,13 @@ def session_view(session_id: str) -> dict:
         adaptations = json.loads(row["adaptations_json"])
         view["recipe"] = {"id": recipe["id"], "title": recipe["title"], "ai_generated": recipe["ai_generated"]}
         view["adaptations"] = adaptations
+        view["servings"] = row["servings"] or recipe["serves"]
+        view["serves_default"] = recipe["serves"]
         view["step"] = _step_payload(recipe, row["step_index"], adaptations)
     return view
 
 
 # ---------------------------------------------------------------------- recipes
-def get_inventory(session_id: str) -> dict:
-    ensure_session(session_id)
-    return {"inventory": MOCK_PANTRY, "note": "Demo pantry data."}
-
-
 def _generated(conn, session_id: str) -> dict:
     rows = conn.execute("SELECT recipe_json FROM generated_recipes WHERE session_id=?", (session_id,)).fetchall()
     out = {}
@@ -190,10 +188,13 @@ def _as_list(value) -> list:
 
 def search_recipes(session_id: str, ingredients=None, max_results: int = 3) -> dict:
     ensure_session(session_id)
+    import pantry  # local import: pantry.py builds on this module
+
     have = _as_list(ingredients)
     used_inventory = False
+    pantry_rows = pantry.rows() if not have else []
     if not have:
-        have = [p["item"] for p in MOCK_PANTRY]
+        have = pantry.available_names(pantry_rows)
         used_inventory = True
     max_results = max(1, min(int(max_results or 3), 5))
     with connect() as conn:
@@ -215,8 +216,13 @@ def search_recipes(session_id: str, ingredients=None, max_results: int = 3) -> d
          "match_pct": round(cov * 100), "have": m, "missing": miss, "ai_generated": r["ai_generated"]}
         for cov, _, _, r, m, miss in scored[:max_results]
     ]
+    if used_inventory:
+        for r in results:
+            r["short"] = pantry.shortfall(pantry_rows, pool[r["id"]], 1.0, pantry.get_units())
     out = {"searched_with": have, "used_inventory": used_inventory, "results": results}
-    if not results or results[0]["match_pct"] < 60:
+    if used_inventory and not have:
+        out["note"] = "The user's pantry is empty. Ask what ingredients they have, or suggest they add some."
+    elif not results or results[0]["match_pct"] < 60:
         out["note"] = "No strong curated match. Suggest substitutions, or create_recipe as a labelled AI fallback."
     return out
 
@@ -237,21 +243,80 @@ def _find_recipe(conn, session_id: str, query: str) -> dict:
     raise CookingError("That matches several recipes: " + "; ".join(f"{h['title']} ({h['id']})" for h in hits[:5]))
 
 
-def start_recipe(session_id: str, recipe: str) -> dict:
+def _valid_servings(servings) -> int | None:
+    if servings in (None, ""):
+        return None
+    try:
+        if isinstance(servings, float) and servings != int(servings):
+            raise ValueError
+        n = int(servings)
+    except (TypeError, ValueError):
+        raise CookingError("Servings must be a whole number.")
+    if not 1 <= n <= 24:
+        raise CookingError("Servings must be between 1 and 24.")
+    return n
+
+
+def start_recipe(session_id: str, recipe: str, servings: int | None = None) -> dict:
+    import pantry
+
     ensure_session(session_id)
+    n = _valid_servings(servings)
+    system = pantry.get_units()
     with connect() as conn:
         rec = _find_recipe(conn, session_id, recipe)
         conn.execute(
-            "UPDATE sessions SET recipe_id=?, recipe_json=?, step_index=0, status='cooking', "
-            "adaptations_json='[]', updated_at=? WHERE id=?",
-            (rec["id"], json.dumps(rec), _now(), session_id),  # timers are deliberately kept
+            "UPDATE sessions SET recipe_id=?, recipe_json=?, step_index=0, status='cooking', adaptations_json='[]', "
+            "servings=?, deduction_state=NULL, deduction_batch=NULL, updated_at=? WHERE id=?",
+            (rec["id"], json.dumps(rec), n, _now(), session_id),  # timers are deliberately kept
         )
+    scale = (n or rec["serves"]) / rec["serves"]
     return {
         "status": "recipe_started", "title": rec["title"], "ai_generated": rec["ai_generated"],
-        "ingredients": [f"{i['qty']} {i['name']}".strip() for i in rec["ingredients"]],
+        "servings": n or rec["serves"], "ingredients": format_ingredients(rec, scale, system),
+        "short_in_pantry": pantry.shortfall(pantry.rows(), rec, scale, system),
         "safety_notes": rec.get("safety_notes", []),
         "current_step": _step_payload(rec, 0, []),
     }
+
+
+def set_servings(session_id: str, servings: int) -> dict:
+    import pantry
+
+    ensure_session(session_id)
+    n = _valid_servings(servings)
+    if n is None:
+        raise CookingError("How many servings?")
+    with connect() as conn:
+        row = _session(conn, session_id)
+        rec = _recipe_of(row)
+        if not rec or row["status"] == "idle":
+            raise CookingError("No recipe is active.")
+        if row["deduction_state"] == "applied":
+            raise CookingError("The ingredients were already subtracted; undo that first.")
+        conn.execute("UPDATE sessions SET servings=?, updated_at=? WHERE id=?", (n, _now(), session_id))
+    system = pantry.get_units()
+    scale = n / rec["serves"]
+    return {"status": "servings_set", "servings": n, "ingredients": format_ingredients(rec, scale, system),
+            "short_in_pantry": pantry.shortfall(pantry.rows(), rec, scale, system),
+            "note": "Amounts scale; step text and cooking times do not."}
+
+
+_SERVINGS_NUM = r"(?P<n>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+_SERVINGS_FOR = re.compile(
+    rf"^(?:please\s+)?(?:(?:make|cook|scale|change|set|do)\s+(?:it|this|that|the recipe|the servings|servings)?\s*(?:for|to)"
+    rf"|(?:i'?m|we'?re|i am|we are)\s+cooking\s+for|for|serves|servings\s+to)\s+{_SERVINGS_NUM}"
+    rf"(?:\s+(?:people|persons|servings|portions|of us))?\s*[.!]?$", re.I)
+_SERVINGS_ONLY = re.compile(rf"^{_SERVINGS_NUM}\s+(?:people|persons|servings|portions)\s*[.!]?$", re.I)
+
+
+def parse_servings_command(text: str) -> int | None:
+    """'cook for 4', 'make it for four people', '4 servings'. Only used while a recipe is active."""
+    m = _SERVINGS_FOR.match(text.strip()) or _SERVINGS_ONLY.match(text.strip())
+    if not m:
+        return None
+    n = units.parse_number(m["n"])
+    return int(n) if n else None
 
 
 def _move(session_id: str, delta: int) -> dict:
@@ -364,7 +429,8 @@ def create_recipe(session_id: str, title: str, ingredients, steps, safety_notes=
         name, qty = str(name or "").strip(), str(qty or "").strip()
         if not 2 <= len(name) <= 60 or len(qty) > 40:
             raise CookingError("Each ingredient needs a name (2-60 chars) and a short quantity.")
-        ings.append({"name": name, "qty": qty})
+        amount, unit = units.parse_quantity(qty, name) if qty else (None, None)
+        ings.append({"name": name, "amount": amount, "unit": unit})
     if not 2 <= len(ings) <= 20:
         raise CookingError("A recipe needs 2 to 20 ingredients.")
     step_list = [str(s).strip() for s in steps or []]
@@ -564,7 +630,10 @@ def pop_newly_expired(session_id: str) -> list:
 # ---------------------------------------------------------- state and history
 def get_state(session_id: str, pop_expired: bool = False) -> dict:
     view = session_view(session_id)
-    state = {"session": view, "timers": list_timers(session_id)["timers"]}
+    import pantry
+
+    state = {"session": view, "timers": list_timers(session_id)["timers"], "units": pantry.get_units(),
+             "pantry_deduction": pantry.deduction_status(session_id)}
     if pop_expired:
         state["newly_expired"] = pop_newly_expired(session_id)
     return state
@@ -582,8 +651,12 @@ def state_summary(session_id: str) -> str:
             lines.append(f"- Step {s['step']['step_number']} of {s['step']['total_steps']}: {s['step']['instruction']}")
         for a in s["adaptations"]:
             lines.append(f"- Substitution: use {a['replacement']} instead of {a['original']}")
+        lines.append(f"- Servings: {s['servings']} (recipe default {s['serves_default']})")
+        if st["pantry_deduction"]["state"] == "pending":
+            lines.append("- The app has asked the user whether to subtract the ingredients from their pantry; they answer yes or no.")
     else:
         lines.append("- No active recipe.")
+    lines.append(f"- Unit system: {'US customary (use °F, cups, oz)' if st['units'] == 'us' else 'metric (use °C, grams, ml)'}")
     if st["timers"]:
         for t in st["timers"]:
             when = "EXPIRED" if t["status"] == "expired" else f"{_mmss(t['remaining_s'])} left"

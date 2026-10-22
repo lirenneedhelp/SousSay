@@ -12,7 +12,35 @@ CREATE TABLE IF NOT EXISTS sessions (
     step_index INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'idle',          -- idle | cooking | completed
     adaptations_json TEXT NOT NULL DEFAULT '[]',
+    servings INTEGER,                             -- NULL = the recipe's own serving count
+    deduction_state TEXT,                         -- NULL (pending) | applied | skipped
+    deduction_batch TEXT,                         -- pantry_log batch to undo
     created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pantry (
+    owner TEXT NOT NULL,                          -- the signed-in user's principal (a pantry outlives sessions)
+    item TEXT NOT NULL,                           -- normalised key, e.g. "egg"
+    label TEXT NOT NULL,                          -- as the user said it, e.g. "eggs"
+    amount REAL,                                  -- NULL = "have some", quantity unknown
+    unit TEXT,                                    -- g | ml | piece | clove | can | bunch | head | handful
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (owner, item)
+);
+CREATE TABLE IF NOT EXISTS pantry_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner TEXT NOT NULL,
+    batch TEXT NOT NULL,
+    item TEXT NOT NULL,
+    label TEXT NOT NULL,
+    delta REAL NOT NULL,                          -- amount subtracted (positive), restored on undo
+    unit TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pantry_log_batch ON pantry_log(owner, batch);
+CREATE TABLE IF NOT EXISTS user_prefs (
+    owner TEXT PRIMARY KEY,
+    units TEXT NOT NULL,                          -- metric | us
     updated_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS timers (
@@ -74,8 +102,9 @@ def init_db() -> None:
         # Migrate databases created before ownership existed. Their sessions keep owner NULL,
         # which matches no principal, so they become inaccessible rather than shared.
         columns = [r["name"] for r in conn.execute("PRAGMA table_info(sessions)")]
-        if "owner" not in columns:
-            conn.execute("ALTER TABLE sessions ADD COLUMN owner TEXT")
+        for column, ddl in (("owner", "TEXT"), ("servings", "INTEGER"), ("deduction_state", "TEXT"), ("deduction_batch", "TEXT")):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {ddl}")
     try:  # the database holds user data: owner read/write only
         for suffix in ("", "-wal", "-shm"):
             if os.path.exists(db_path() + suffix):

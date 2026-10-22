@@ -32,9 +32,11 @@ The suite uses a scripted fake Bedrock, so it needs no AWS access. It does NOT t
       -> cooking.py (SQLite) -> reply text -> speechSynthesis
     browser polls GET /api/state every 2s: timer countdowns + one-time expiry notifications
 
-- `mcp_tools.py`  the single definition of all 15 tools, served at `/mcp/` (Streamable HTTP).
-- `cooking.py`    all logic and state: recipes, sessions, steps, timers, substitutions, safety.
-- `db.py`         SQLite schema (`sessions`, `timers`, `messages`, `generated_recipes`).
+- `mcp_tools.py`  the single definition of all 18 tools, served at `/mcp/` (Streamable HTTP).
+- `cooking.py`    sessions, steps, timers, recipes, servings, substitutions, safety.
+- `pantry.py`     per-user pantry, unit preference, deduction with undo, plain-language pantry commands.
+- `units.py`      quantity parsing, conversion and metric/US formatting (pure functions).
+- `db.py`         SQLite schema (`sessions`, `timers`, `messages`, `generated_recipes`, `pantry`, `pantry_log`, `user_prefs`).
 - `data/`         curated recipes, substitutions and food-safety temperatures (edit the JSON to extend).
 
 Design rules: the app, not the model, owns step position and timer deadlines (`due_at` is an
@@ -42,9 +44,23 @@ absolute timestamp; expiry is computed on read). The model never sees or supplie
 AI-generated recipes are a last resort, validated by the app (shape limits, mandatory safe-temperature
 step for meat/poultry/fish/eggs, unsafe-practice blocklist) and always labelled.
 
+## Pantry, servings and units
+
+- **Per user.** Each signed-in browser has its own pantry (names plus optional amounts), kept in SQLite and
+  independent of cooking sessions, so "New session" does not empty it. Edit it in the Pantry panel, or say
+  "add 6 eggs and 500 g rice to my pantry", "I'm out of lemons", "I only have 3 eggs left", "what's in my pantry?".
+  Those phrasings are handled by the app itself; anything else goes to the model, which can use `update_pantry`.
+- **Servings.** Pick them with the +/- stepper, or say "cook for 4" while cooking. Ingredient amounts, shortfalls
+  and the pantry deduction scale with it. Step text and cooking times do not scale.
+- **Subtract after cooking.** When a recipe finishes the app asks (card and voice) whether to subtract its
+  ingredients. It subtracts once, only what it can compare exactly (same ingredient, convertible units), reports
+  what it skipped, uses up an item if you had less than needed, and offers Undo. Say "yes", "no" or "undo".
+- **Units match your country.** Amounts are stored in grams/millilitres/counts. The first visit picks metric or US
+  customary from the browser's language region (US, Liberia and Myanmar use US units); change it in the Pantry
+  panel. Step text keeps the units it was written in (temperatures show both °F and °C).
+
 ## Known limits
 
-- Demo pantry is mocked (`cooking.MOCK_PANTRY`); there is no inventory editing.
 - One shared access code, not per-user accounts. Run a single worker. See `SECURITY.md` for remaining risks.
 - Timer alerts only fire while the page is open; background tabs may throttle polling and speech.
 
@@ -53,3 +69,4 @@ step for meat/poultry/fish/eggs, unsafe-practice blocklist) and always labelled.
 1. "What can I cook?"  2. "I have eggs, canned tomatoes and onions."  3. "Let's make the shakshuka."
 4. "Next step."  5. "Set a 20 second timer for the eggs."  6. "How long is left?"  7. "Repeat that."
 8. "Is it safe to eat chicken at 150 degrees?"  9. "I don't have an onion." (substitution)
+10. "Add 6 eggs and 500 g rice to my pantry."  11. "Cook for 4."  12. Finish a recipe, then say "yes" (and "undo").

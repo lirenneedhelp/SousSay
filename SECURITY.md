@@ -30,6 +30,18 @@
 - **Hosts:** `ALLOWED_HOSTS` is enforced for the whole app and for FastMCP's own guard.
 - **Model-call budget:** 12 chats/min per user, 36/min per IP, 300/hour overall (all configurable).
 
+## Pantry, servings and deduction (added later)
+
+- **Ownership:** a pantry belongs to the signed-in identity and is read and written only under that identity
+  (enforced in the data layer; the HTTP and MCP paths both go through it). MCP clients have their own pantry.
+- **Endpoints** (`/api/pantry`, `/api/preferences`, `/api/servings`, `/api/pantry/deduct`) require sign-in, the same
+  Origin check as other writes, strict request models (unknown fields rejected), and 30-60 writes per minute per user.
+  Caps: 100 items per pantry, 20 per request, 80 characters per item, 1-24 servings, 10 generated recipes.
+- **Deduction** claims the session's decision atomically in the same transaction as the pantry update and the undo
+  log, so it happens exactly once even with concurrent requests (tested with 10 threads).
+- **Unit detection** uses only the browser's language setting; no IP geolocation or other personal data is collected.
+- **Display safety:** pantry text is rendered with `textContent` only, never as HTML.
+
 ## Remaining risks (read before making it public)
 
 1. **Shared access code:** anyone with the code can use the demo and spend quota up to the hourly cap. Share it
@@ -42,6 +54,8 @@
 6. **Cookies last 24 h** and cannot be revoked individually; rotating `SESSION_SECRET` signs everyone out.
 7. **Signing in again creates a new identity,** so a browser's earlier session is unreachable and the page
    silently starts a fresh one (earlier timers are lost to that browser).
-8. **Pantry data is mock;** the app stores conversation text in SQLite. Back it up or wipe it deliberately.
+8. **The database holds user data** (conversation text, pantry contents, unit choice). Back it up or wipe it deliberately.
+   A pantry is tied to the sign-in identity, so after cookie expiry or a new sign-in the old pantry is unreachable.
+   Deduction is an estimate from recipe amounts and unit conversions; it skips what it cannot compare and offers undo.
 9. **Not verified here:** Docker image build, Caddy/HTTPS issuance, EC2/IAM, real Bedrock permissions, and a real
    browser (Tailwind rendering and Web Speech). See DEPLOY.md for how to check each.

@@ -159,3 +159,82 @@ def test_session_and_timers_survive_server_restart(monkeypatch, clock):
 def test_health_and_index(client):
     assert client.get("/api/health").json() == {"status": "ok"}
     assert client.get("/").status_code == 200
+
+
+# ----------------------------------------------------- the model must not invent timers
+def test_timer_questions_are_answered_from_the_database_without_the_model(client, monkeypatch, clock):
+    fake = use_bedrock(monkeypatch, [tools(("set_timer", {"label": "rice", "minutes": 15}), ("set_timer", {"label": "curry", "seconds": 20})), text("Both timers are running.")])
+    chat(client, "set two timers")
+    clock.advance(30)
+    spy = use_bedrock(monkeypatch, [text("must never be called")])
+    for question in ("do I have any active timers", "where's my timer", "how long left", "what active timers do I have right now"):
+        r = chat(client, question).json()
+        assert "rice has 14 minutes and 30 seconds left" in r["response"] and "curry is done" in r["response"]
+        assert r["tools_called"] == []
+    assert spy.calls == []
+    assert "no timers" not in cooking.describe_timers(SID).lower()
+
+
+def test_no_timers_is_reported_honestly(client, monkeypatch):
+    spy = use_bedrock(monkeypatch, [text("You have a timer for curry.")])
+    assert chat(client, "do i have any active timers").json()["response"] == "You don't have any timers running."
+    assert spy.calls == []
+
+
+def test_commands_that_mention_timers_still_go_to_the_model(client, monkeypatch):
+    spy = use_bedrock(monkeypatch, [text("ok")], repeat_last=True)
+    for command in ("cancel the rice timer", "stop the timer", "start a timer"):  # (a plain "set a 5 minute timer" is handled by the app)
+        chat(client, command)
+    assert len(spy.calls) == 3
+
+
+def test_unbacked_timer_set_claim_is_replaced_and_not_remembered(client, monkeypatch):
+    use_bedrock(monkeypatch, [text("I've set a 20 minute timer for Thai Beef Curry Cooking."), text("ok")])
+    r = chat(client, "please put 20 minutes on the curry").json()
+    assert "couldn't start that timer" in r["response"] and r["state"]["timers"] == []
+    assert "Thai Beef" not in str(cooking.load_history(SID))  # the false claim never enters the conversation history
+
+
+def test_backed_set_claim_and_offers_are_left_alone(client, monkeypatch):
+    use_bedrock(monkeypatch, [tools(("set_timer", {"label": "rice", "minutes": 15})), text("I've set a 15 minute timer for rice.")])
+    r = chat(client, "15 minutes for the rice").json()
+    assert r["response"] == "I've set a 15 minute timer for rice." and len(r["state"]["timers"]) == 1
+    use_bedrock(monkeypatch, [text("Want me to set a timer for 20 minutes?")])
+    assert chat(client, "what next").json()["response"] == "Want me to set a timer for 20 minutes?"
+
+
+def test_unbacked_cancel_claim_is_replaced(client, monkeypatch):
+    use_bedrock(monkeypatch, [text("I've cancelled the rice timer."), tools(("set_timer", {"label": "rice", "minutes": 5})), text("ok")])
+    assert "couldn't cancel" in chat(client, "get rid of the rice thing").json()["response"]
+
+
+@pytest.mark.parametrize("message", ["timers for rice and chicken", "a 10 minute timer for pasta", "twenty minutes on the curry",
+                                     "what timer should I use for the eggs", "what timers does this recipe need",
+                                     "can you add a timer", "timer for rice"])
+def test_implicit_timer_commands_are_not_mistaken_for_status_questions(message):
+    assert main.is_timer_status_query(message) is False
+
+
+@pytest.mark.parametrize("message", ["do i have any active timers", "where's my timer", "how long left", "how much longer",
+                                     "what active timers do i have right now", "is the rice timer done", "check my timers", "time left?"])
+def test_real_timer_status_questions_are_recognised(message):
+    assert main.is_timer_status_query(message) is True
+
+
+def test_plain_timer_request_is_done_by_the_app_without_the_model(client, monkeypatch):
+    spy = use_bedrock(monkeypatch, [text("must never be called")])
+    r = chat(client, "set a 8 minute timer for eggs").json()
+    assert r["response"] == "Okay, eggs timer set for 8 minutes." and spy.calls == []
+    assert [(t["label"], t["remaining_s"]) for t in r["state"]["timers"]] == [("eggs", 480)]
+    r = chat(client, "set a 90 second timer").json()
+    assert "kitchen timer set for 1 minute and 30 seconds" in r["response"] and len(r["state"]["timers"]) == 2
+    assert "eggs" in chat(client, "do i have any timers").json()["response"]
+    assert [m["role"] for m in cooking.load_history(SID)][:2] == ["user", "assistant"]
+
+
+def test_plain_timer_request_with_a_bad_duration_explains_why(client, monkeypatch):
+    spy = use_bedrock(monkeypatch, [text("nope")])
+    for phrase in ("set a 0 minute timer for eggs", "set a 5000 hour timer for eggs"):
+        r = chat(client, phrase).json()
+        assert "couldn't start that timer" in r["response"] and "between 1 second and 12 hours" in r["response"]
+    assert spy.calls == [] and chat(client, "do i have any timers").json()["response"] == "You don't have any timers running."

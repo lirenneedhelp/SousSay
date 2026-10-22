@@ -15,6 +15,10 @@ const $ = (id) => document.getElementById(id);
 const JSON_HEADERS = {'Content-Type': 'application/json'};
 let busy = false;
 let snapshot = {timers: [], at: Date.now()};
+let lastDeductionState;
+let currentServings = 2;
+const SAMPLE_ITEMS = ['2 chicken breast', '1 lemon', '500 g rice', '200 ml soy sauce', '30 g ginger', '6 eggs',
+    '1 can canned tomatoes', '2 onions', '6 cloves garlic'];
 
 function rotateSession() {
     sessionId = newId();
@@ -22,6 +26,8 @@ function rotateSession() {
     $('tool-badge').classList.add('hidden');
     snapshot = {timers: [], at: Date.now()};
     $('step-card').classList.add('hidden');
+    $('deduct-card').classList.add('hidden');
+    lastDeductionState = null;
     renderTimers();
 }
 
@@ -47,6 +53,7 @@ $('login-form').addEventListener('submit', async (e) => {
             $('login-overlay').classList.add('hidden');
             loginVisible = false;
             pollState();
+            loadPantry();
         } else {
             let data = null;
             try { data = await res.json(); } catch (err) { /* non-JSON body */ }
@@ -201,6 +208,7 @@ async function sendToSousChef(userText, retried = false) {
             $('tool-badge').classList.remove('hidden');
         }
         if (data.state) applyState(data.state);
+        loadPantry();  // a spoken command may have changed it
         speakText(data.response);
     } catch (err) {
         showProblem('Error', 'Sorry, I had trouble connecting to the backend.');
@@ -228,6 +236,10 @@ function applyState(state) {
     }
     snapshot = {timers: state.timers || [], at: Date.now()};
     renderTimers();
+    if (s && s.servings) { currentServings = s.servings; $('servings-count').textContent = s.servings; }
+    renderDeduction(state.pantry_deduction);
+    const ds = state.pantry_deduction ? state.pantry_deduction.state : null;
+    if (ds !== lastDeductionState) { lastDeductionState = ds; loadPantry(); }
 }
 
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
@@ -307,3 +319,139 @@ $('new-session-btn').addEventListener('click', () => {
     rotateSession();
     $('chef-response').innerText = '"New session. What are we cooking?"';
 });
+
+// ---- Servings ----
+async function changeServings(delta) {
+    const next = Math.min(24, Math.max(1, currentServings + delta));
+    if (next === currentServings) return;
+    try {
+        const res = await fetch('/api/servings', {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({session_id: sessionId, servings: next})});
+        if (res.status === 401) { showLogin('Please enter the access code to continue.'); return; }
+    } catch (e) { /* the next poll shows the real value */ }
+    pollState();
+}
+$('servings-down').addEventListener('click', () => changeServings(-1));
+$('servings-up').addEventListener('click', () => changeServings(1));
+
+// ---- Pantry (per user, stored on the server; the browser only displays and requests changes) ----
+function detectUnits() {
+    // Only an explicit country counts ("en-US"); a bare "en" does not say where the user is, so it stays metric.
+    try {
+        for (const lang of (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language])) {
+            const region = (new Intl.Locale(lang || 'en').region || '').toUpperCase();
+            if (region) return ['US', 'LR', 'MM'].includes(region) ? 'us' : 'metric';
+        }
+    } catch (e) { /* fall through */ }
+    return 'metric';
+}
+
+function setPantryMessage(text) { $('pantry-msg').textContent = text || ''; }
+
+async function pantryRequest(path, body) {
+    const res = await fetch(path, {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body)});
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* non-JSON body */ }
+    if (res.status === 401) { showLogin('Please enter the access code to continue.'); return null; }
+    if (res.status === 429) { setPantryMessage('Too many changes. Wait a moment.'); return null; }
+    if (!res.ok) { setPantryMessage(typeof (data && data.detail) === 'string' ? data.detail : 'That was not accepted.'); return null; }
+    return data;
+}
+
+function renderPantry(data) {
+    $('units-select').value = data.units;
+    $('pantry-count').textContent = data.items.length ? `(${data.items.length})` : '';
+    $('pantry-empty').classList.toggle('hidden', data.items.length > 0);
+    const chips = data.items.map((item) => {
+        const chip = document.createElement('span');
+        chip.className = 'flex items-center gap-2 rounded-full bg-slate-900 border border-slate-600 px-3 py-1 text-sm text-slate-200';
+        const label = document.createElement('span');
+        label.textContent = item.display;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'text-slate-500 hover:text-amber-300';
+        remove.setAttribute('aria-label', `Remove ${item.label}`);
+        remove.textContent = '×';
+        remove.addEventListener('click', async () => {
+            const out = await pantryRequest('/api/pantry', {action: 'remove', items: [item.label]});
+            if (out) { renderPantry(out); setPantryMessage(out.summary); }
+        });
+        chip.append(label, remove);
+        return chip;
+    });
+    $('pantry-items').replaceChildren(...chips);
+}
+
+let pantryLoading = false, pantryDirty = false;
+async function loadPantry() {
+    if (loginVisible) return;
+    if (pantryLoading) { pantryDirty = true; return; }  // a change arrived mid-load: reload again when this one ends
+    pantryLoading = true;
+    try {
+        const res = await fetch('/api/pantry');
+        if (res.status === 401) { showLogin('Please enter the access code.'); return; }
+        if (!res.ok) return;
+        let data = await res.json();
+        if (!data.units_set) {  // first visit: match the units of the user's country, changeable below
+            const set = await pantryRequest('/api/preferences', {units: detectUnits()});
+            if (set) data = await (await fetch('/api/pantry')).json();
+        }
+        renderPantry(data);
+    } catch (e) { /* offline: keep what is shown */ }
+    finally {
+        pantryLoading = false;
+        if (pantryDirty) { pantryDirty = false; loadPantry(); }
+    }
+}
+
+$('pantry-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = $('pantry-input').value.trim();
+    if (!value) return;
+    const out = await pantryRequest('/api/pantry', {action: 'add', items: [value]});
+    if (out) { $('pantry-input').value = ''; renderPantry(out); setPantryMessage(out.summary); }
+});
+
+$('pantry-sample').addEventListener('click', async () => {
+    const out = await pantryRequest('/api/pantry', {action: 'add', items: SAMPLE_ITEMS});
+    if (out) { renderPantry(out); setPantryMessage('Added sample items.'); }
+});
+
+$('units-select').addEventListener('change', async () => {
+    const out = await pantryRequest('/api/preferences', {units: $('units-select').value});
+    if (out) { loadPantry(); pollState(); }
+});
+
+// ---- After cooking: subtract ingredients from the pantry (ask, then allow undo) ----
+function renderDeduction(d) {
+    const card = $('deduct-card');
+    if (!d || !d.state || d.state === 'skipped') { card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    const used = d.used || [];
+    $('deduct-title').textContent = d.state === 'applied' ? 'Subtracted from your pantry'
+        : used.length ? 'Subtract these ingredients from your pantry?' : 'Nothing in your pantry matches this recipe exactly.';
+    $('deduct-list').replaceChildren(...used.map((text) => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    $('deduct-skipped').textContent = (d.skipped && d.skipped.length)
+        ? 'Not matched: ' + d.skipped.map((s) => `${s.item} (${s.reason})`).join('; ') : '';
+    const button = (label, decision, primary) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = primary ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold px-4 py-1 rounded-full text-sm'
+                              : 'bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-1 rounded-full text-sm';
+        b.textContent = label;
+        b.addEventListener('click', () => decide(decision));
+        return b;
+    };
+    $('deduct-actions').replaceChildren(...(d.state === 'pending'
+        ? [button('Skip', 'skip', false), button('Subtract', 'apply', true)] : [button('Undo', 'undo', false)]));
+}
+
+async function decide(decision) {
+    try {
+        const res = await fetch('/api/pantry/deduct', {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({session_id: sessionId, decision})});
+        if (res.status === 401) { showLogin('Please enter the access code to continue.'); return; }
+    } catch (e) { /* the next poll shows the real state */ }
+    pollState();
+    loadPantry();
+}
+
+loadPantry();

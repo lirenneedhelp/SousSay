@@ -333,7 +333,7 @@ def test_rejected_requests_do_not_consume_model_budget(monkeypatch):
 
 
 # ============================================================ Bedrock failure handling
-def client_error(code, message="Rate exceeded for arn:aws:bedrock:ap-southeast-1:123456789012:foundation-model/x"):
+def client_error(code, message="Rate exceeded for arn:aws:bedrock:us-east-1:123456789012:foundation-model/x"):
     return ClientError({"Error": {"Code": code, "Message": message}}, "Converse")
 
 
@@ -345,7 +345,7 @@ def client_error(code, message="Rate exceeded for arn:aws:bedrock:ap-southeast-1
     (client_error("ModelTimeoutException"), 504, "too long"),
     (client_error("ServiceUnavailableException"), 503, "temporarily unavailable"),
     (NoCredentialsError(), 503, "not set up correctly"),
-    (ReadTimeoutError(endpoint_url="https://bedrock-runtime.ap-southeast-1.amazonaws.com"), 504, "too long"),
+    (ReadTimeoutError(endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com"), 504, "too long"),
     (RuntimeError("boom: secret-token-123"), 502, "Something went wrong"),
 ])
 def test_bedrock_failures_become_safe_actionable_errors(monkeypatch, caplog, exc, status, phrase):
@@ -553,8 +553,8 @@ def test_authorised_mcp_client_can_discover_and_call_tools(live_server):
         async with Client(live_server + "/mcp/", auth=MCP_KEY) as c:
             return {t.name for t in await c.list_tools()}
     names = asyncio.run(go())
-    assert {"search_recipes", "start_recipe", "next_step", "set_timer", "list_timers", "cancel_timer",
-            "food_safety_lookup", "create_recipe"} <= names and len(names) == 15
+    assert {"search_recipes", "start_recipe", "next_step", "set_timer", "list_timers", "cancel_timer", "food_safety_lookup",
+            "create_recipe", "get_pantry", "update_pantry", "set_servings", "pantry_deduction"} <= names and len(names) == 18
     sid = "mcp-session-0001"
     assert mcp_call(live_server, "start_recipe", {"session_id": sid, "recipe": "shakshuka"})[0] is False
     assert mcp_call(live_server, "set_timer", {"session_id": sid, "label": "eggs", "seconds": 30})[0] is False
@@ -587,3 +587,15 @@ def test_browser_and_live_server_serve_the_frontend(live_server):
     assert r.status_code == 200 and "Alexa+ Kitchen Display" in r.text
     for asset in ("/static/app.js", "/static/app.css"):
         assert httpx.get(live_server + asset).status_code == 200
+
+
+def test_mcp_pantry_is_private_to_the_mcp_principal(live_server):
+    err, out = mcp_call(live_server, "update_pantry", {"session_id": "mcp-pantry-0001", "action": "add", "items": ["6 eggs"]})
+    assert not err and "6 eggs" in out
+    err, out = mcp_call(live_server, "get_pantry", {"session_id": "mcp-pantry-0001"})
+    assert "6 eggs" in out
+    with cooking.acting_as("u:alice"):
+        import pantry
+        assert pantry.list_pantry()["items"] == []  # a browser user never sees the MCP client's pantry
+        pantry.update_pantry("add", ["2 lemons"])
+    assert "lemon" not in mcp_call(live_server, "get_pantry", {"session_id": "mcp-pantry-0001"})[1]

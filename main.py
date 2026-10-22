@@ -6,7 +6,7 @@ import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import boto3
 from botocore.config import Config
@@ -22,6 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 import cooking
 import db
+import pantry
 from cooking import CookingError, SessionNotFound
 from mcp_tools import mcp
 from security import (COOKIE_NAME, BodyLimitMiddleware, McpAuthMiddleware, RateLimiter, SecurityHeadersMiddleware,
@@ -81,13 +82,16 @@ State: the CURRENT KITCHEN STATE block below is authoritative and maintained by 
 Workflow:
 - When asked what to cook, or when the user names ingredients, call search_recipes (pass the ingredients they named, or none to use their pantry). Offer the best one or two by name and say what is missing. For a missing ingredient, call suggest_substitution.
 - Only if search_recipes finds no good match (nothing, or match_pct under 60) may you call create_recipe. Tell the user it is an AI-generated recipe and ask before starting it.
-- When the user picks a recipe, call start_recipe, read the first step, and mention any safety note briefly.
+- When the user picks a recipe, call start_recipe (pass servings if they said how many people), read the first step, and mention any safety note briefly. If the result lists short_in_pantry, say briefly what they are short of.
+- The user's pantry is tracked by the app. To change it, call update_pantry; to read it, call get_pantry. Never say you added, removed or subtracted anything unless the tool result says so. After a recipe finishes the app itself asks whether to subtract ingredients and handles the yes/no.
 - "Next" means next_step, "repeat" means get_current_step, "go back" means previous_step. If the user says they use a different ingredient, call apply_substitution.
 - If a step has a timer_hint, offer it in one short sentence, and call set_timer when the user agrees. Also call set_timer whenever the user asks for a timer, with a clear name. Convert spoken durations to minutes and seconds yourself.
 - Use list_timers to report remaining time and cancel_timer to cancel or dismiss one. Several timers can run at once.
 - Questions during cooking: answer from the state and the recipe. If the user interrupts ("hold on", "the phone is ringing"), do not advance; say you will wait. Timers keep running.
 
 Timers: never say you set, started, cancelled, or have a timer unless a tool result in this turn confirmed it or the state block lists it. Earlier conversation messages may be wrong about timers; the state block is the truth. To start a timer you must call set_timer; to cancel one you must call cancel_timer.
+
+Units: follow the Unit system in the state block (metric: grams, ml, °C; US: cups, oz, °F). Tool results give both temperatures; quote the one that matches.
 
 Food safety: for any doneness, temperature, or storage question call food_safety_lookup instead of guessing. Never suggest undercooked poultry or ground meat, or leaving perishable food out more than 2 hours. If a tool returns an error, say so briefly in plain words and do not make up a result. If unsure, say so and suggest checking USDA guidance."""
 
@@ -241,6 +245,10 @@ _CANCEL_CLAIM = re.compile(r"\b(i['’]?ve|i have|i)\s+(cancel+ed|stopped|dismis
                            r"|\btimer\b[^.?!]{0,40}\b(is|has been|was)\s+(now\s+)?(cancel+ed|stopped|dismissed|removed)\b", re.I)
 
 
+_PANTRY_CLAIM = re.compile(r"\b(i['’]?ve|i have|i)\s+(added|removed|updated|subtracted|deducted|taken)\b[^.?!]{0,80}\b(pantry|inventory|fridge)"
+                           r"|\b(pantry|inventory)\b[^.?!]{0,40}\b(is|has been|was)\s+(now\s+)?(updated|changed)\b", re.I)
+
+
 def guard_unbacked_claims(reply: str, ok_tools: set[str]) -> str:
     """The model sometimes says it did something it never did. If it claims to have set or cancelled a timer
     without a successful tool call this turn, replace the claim with an honest message."""
@@ -249,6 +257,9 @@ def guard_unbacked_claims(reply: str, ok_tools: set[str]) -> str:
     if _SET_CLAIM.search(reply) and "set_timer" not in ok_tools:
         log.warning("Replaced an unbacked 'timer set' claim")
         return "I couldn't start that timer. Please say it again with a name and a length, like: set a 15 minute timer for rice."
+    if _PANTRY_CLAIM.search(reply) and not ({"update_pantry", "pantry_deduction"} & ok_tools):
+        log.warning("Replaced an unbacked pantry claim")
+        return "I couldn't change your pantry. Try saying: add 6 eggs to my pantry."
     if _CANCEL_CLAIM.search(reply) and "cancel_timer" not in ok_tools:
         log.warning("Replaced an unbacked 'timer cancelled' claim")
         return "I couldn't cancel that timer. Say which one, like: cancel the rice timer."
@@ -260,6 +271,40 @@ def clean_spoken_text(raw: str) -> str:
     text = re.sub(r"</?thinking>", "", text)
     text = re.sub(r"[*#`]+", "", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def app_shortcut(session_id: str, text: str) -> str | None:
+    """Plain pantry, servings and yes/no answers are handled by the app, so they never depend on the model."""
+    try:
+        if len(text) <= 60:
+            state = pantry.deduction_status(session_id)["state"]
+            decision = pantry.parse_deduction_reply(text, state)
+            if decision == "apply":
+                r = pantry.apply_deduction(session_id)
+                said = "Done. I subtracted " + pantry._join(r["used"]) + "." if r["used"] else r.get("note", "Done.")
+                if r["skipped"]:
+                    said += " I couldn't match " + pantry._join([s["item"] for s in r["skipped"]]) + "."
+                return said + " Say undo to put it back."
+            if decision == "skip":
+                pantry.skip_deduction(session_id)
+                return "Okay, I left your pantry as it was."
+            if decision == "undo":
+                r = pantry.undo_deduction(session_id)
+                return "Okay, I put " + pantry._join(r["restored"]) + " back." if r["restored"] else "Okay, nothing to put back."
+        servings = cooking.parse_servings_command(text)
+        if servings and cooking.session_view(session_id)["status"] == "cooking":
+            r = cooking.set_servings(session_id, servings)
+            said = f"Okay, scaled to {r['servings']} servings."
+            if r["short_in_pantry"]:
+                said += " You're short on " + pantry._join([s["item"] for s in r["short_in_pantry"]]) + "."
+            return said
+        cmd = pantry.parse_pantry_command(text)
+        if cmd:
+            action, items = cmd
+            return pantry.describe_pantry() if action == "list" else pantry.update_pantry(action, items)["summary"]
+    except CookingError as e:
+        return f"I couldn't do that. {e}"
+    return None
 
 
 async def run_turn(session_id: str, user_text: str) -> tuple[str, list[str]]:
@@ -278,6 +323,11 @@ async def run_turn(session_id: str, user_text: str) -> tuple[str, list[str]]:
             reply = f"I couldn't start that timer. {e}"
         cooking.add_messages(session_id, [("user", user_text), ("assistant", reply)])
         return reply, []
+    shortcut = app_shortcut(session_id, user_text)
+    if shortcut is not None:
+        cooking.add_messages(session_id, [("user", user_text), ("assistant", shortcut)])
+        return shortcut, []
+    status_before = cooking.session_view(session_id)["status"]
     messages = cooking.load_history(session_id) + [{"role": "user", "content": [{"text": user_text}]}]
     system = [{"text": SYSTEM_PROMPT + "\n\n" + cooking.state_summary(session_id)}]
     tools = await get_bedrock_tools()
@@ -311,6 +361,9 @@ async def run_turn(session_id: str, user_text: str) -> tuple[str, list[str]]:
             messages.append({"role": "user", "content": results})
 
     reply = guard_unbacked_claims(reply, ok_tools)
+    if status_before != "completed" and cooking.session_view(session_id)["status"] == "completed" \
+            and pantry.deduction_status(session_id)["state"] == "pending":
+        reply += " Want me to subtract the ingredients from your pantry?"
     cooking.add_messages(session_id, [("user", user_text), ("assistant", reply)])
     return reply, tools_called
 
@@ -415,5 +468,85 @@ def cancel_timer_endpoint(req: DismissRequest, principal: str = Depends(require_
     try:
         with cooking.acting_as(principal):
             return cooking.cancel_timer(req.session_id, timer_id=req.timer_id)
+    except Exception as exc:
+        raise to_http_error(exc)
+
+
+# ----------------------------------------------------- pantry, units, servings
+def _limited(principal: str, bucket: str, per_min: int = 60) -> None:
+    if not limiter.allow(f"{bucket}:{principal}", per_min):
+        raise too_many()
+
+
+@app.get("/api/pantry")
+def pantry_get(principal: str = Depends(require_user)):
+    _limited(principal, "pantry-read", settings.state_per_min)
+    try:
+        with cooking.acting_as(principal):
+            return pantry.list_pantry()
+    except Exception as exc:
+        raise to_http_error(exc)
+
+
+class PantryChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["add", "set", "remove"]
+    items: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(min_length=1, max_length=20)
+
+
+@app.post("/api/pantry", dependencies=[Depends(require_same_origin)])
+def pantry_change(req: PantryChange, principal: str = Depends(require_user)):
+    _limited(principal, "pantry-write")
+    try:
+        with cooking.acting_as(principal):
+            return pantry.update_pantry(req.action, req.items)
+    except Exception as exc:
+        raise to_http_error(exc)
+
+
+class UnitsChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    units: Literal["metric", "us"]
+
+
+@app.post("/api/preferences", dependencies=[Depends(require_same_origin)])
+def preferences_change(req: UnitsChange, principal: str = Depends(require_user)):
+    _limited(principal, "prefs", 30)
+    try:
+        with cooking.acting_as(principal):
+            return pantry.set_units(req.units)
+    except Exception as exc:
+        raise to_http_error(exc)
+
+
+class ServingsChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str = Field(pattern=SESSION_PATTERN)
+    servings: int = Field(ge=1, le=24)
+
+
+@app.post("/api/servings", dependencies=[Depends(require_same_origin)])
+def servings_change(req: ServingsChange, principal: str = Depends(require_user)):
+    _limited(principal, "servings", 60)
+    try:
+        with cooking.acting_as(principal):
+            return cooking.set_servings(req.session_id, req.servings)
+    except Exception as exc:
+        raise to_http_error(exc)
+
+
+class DeductionDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str = Field(pattern=SESSION_PATTERN)
+    decision: Literal["apply", "skip", "undo"]
+
+
+@app.post("/api/pantry/deduct", dependencies=[Depends(require_same_origin)])
+def pantry_deduct(req: DeductionDecision, principal: str = Depends(require_user)):
+    _limited(principal, "deduct", 30)
+    actions = {"apply": pantry.apply_deduction, "skip": pantry.skip_deduction, "undo": pantry.undo_deduction}
+    try:
+        with cooking.acting_as(principal):
+            return actions[req.decision](req.session_id)
     except Exception as exc:
         raise to_http_error(exc)

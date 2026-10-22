@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
 
 import cooking
+import pantry
 from cooking import CookingError
 
 mcp = FastMCP("TalkSous")
@@ -42,9 +43,17 @@ def _run(fn, *args, **kwargs) -> str:
 
 
 @mcp.tool()
-def get_inventory(session_id: str) -> str:
-    """Returns the ingredients the user currently has at home (demo pantry)."""
-    return _run(cooking.get_inventory, session_id)
+def get_pantry(session_id: str) -> str:
+    """Lists what is in the user's pantry, with amounts, in their unit system."""
+    return _run(lambda: pantry.list_pantry())
+
+
+@mcp.tool()
+def update_pantry(session_id: str, action: str, items: list[str]) -> str:
+    """Changes the user's pantry. action is 'add' (adds to what is there), 'set' (replaces the amount) or 'remove'
+    (removes the item, or subtracts an amount). items are plain phrases like '6 eggs' or '500 g rice'. Only call this
+    when the user asks to change their pantry, and report only what the result says happened."""
+    return _run(pantry.update_pantry, action, items)
 
 
 @mcp.tool()
@@ -76,9 +85,27 @@ def create_recipe(session_id: str, title: str, ingredients: list[dict[str, str]]
 
 
 @mcp.tool()
-def start_recipe(session_id: str, recipe: str) -> str:
-    """Starts cooking a recipe by id or name and returns the first step and safety notes."""
-    return _run(cooking.start_recipe, session_id, recipe)
+def start_recipe(session_id: str, recipe: str, servings: int | None = None) -> str:
+    """Starts cooking a recipe by id or name for the given number of servings (default: the recipe's own).
+    Returns scaled ingredients, any pantry shortfalls, the first step and safety notes."""
+    return _run(cooking.start_recipe, session_id, recipe, servings)
+
+
+@mcp.tool()
+def set_servings(session_id: str, servings: int) -> str:
+    """Changes how many servings the active recipe is for. Ingredient amounts scale; step text and times do not."""
+    return _run(cooking.set_servings, session_id, servings)
+
+
+@mcp.tool()
+def pantry_deduction(session_id: str, action: str) -> str:
+    """After a recipe is finished: action 'preview' is not needed (the app shows it); 'apply' subtracts the recipe's
+    ingredients from the pantry once, 'skip' declines, 'undo' reverses an applied subtraction. Only call this
+    when the user has answered the app's question or asked to undo."""
+    actions = {"apply": pantry.apply_deduction, "skip": pantry.skip_deduction, "undo": pantry.undo_deduction}
+    if action not in actions:
+        return json.dumps({"error": "Action must be apply, skip or undo."})
+    return _run(actions[action], session_id)
 
 
 @mcp.tool()

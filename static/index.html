@@ -39,10 +39,47 @@
                 <span id="step-count"></span>
             </div>
             <p id="step-text" class="mt-2 text-slate-100"></p>
+            <div class="mt-3 flex items-center justify-end gap-2 text-xs text-slate-400">
+                <span>Servings</span>
+                <button id="servings-down" type="button" aria-label="Fewer servings" class="w-7 h-7 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-100">−</button>
+                <span id="servings-count" class="w-6 text-center text-slate-100 font-mono">2</span>
+                <button id="servings-up" type="button" aria-label="More servings" class="w-7 h-7 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-100">+</button>
+            </div>
+        </div>
+
+        <!-- Pantry deduction prompt (after a recipe is finished) -->
+        <div id="deduct-card" class="hidden text-left bg-slate-800/60 rounded-xl p-4 border border-cyan-500/40">
+            <p id="deduct-title" class="font-semibold text-slate-200"></p>
+            <ul id="deduct-list" class="mt-2 text-sm text-slate-300 list-disc list-inside"></ul>
+            <p id="deduct-skipped" class="mt-2 text-xs text-slate-500"></p>
+            <div id="deduct-actions" class="mt-3 flex justify-end gap-3"></div>
         </div>
 
         <!-- Timers -->
         <div id="timers" class="flex flex-wrap justify-center gap-3"></div>
+
+        <!-- Pantry -->
+        <details id="pantry-panel" class="text-left bg-slate-800/60 rounded-xl p-4 border border-slate-700">
+            <summary class="cursor-pointer text-sm font-semibold text-slate-200">Pantry <span id="pantry-count" class="text-slate-500 font-normal"></span></summary>
+            <div class="mt-3 flex items-center justify-between text-xs text-slate-400">
+                <span>Amounts shown in</span>
+                <select id="units-select" aria-label="Unit system" class="bg-slate-900 border border-slate-600 rounded-full px-3 py-1 text-slate-100">
+                    <option value="metric">Metric (g, ml)</option>
+                    <option value="us">US (oz, cups)</option>
+                </select>
+            </div>
+            <div id="pantry-items" class="mt-3 flex flex-wrap gap-2"></div>
+            <p id="pantry-empty" class="mt-3 text-sm text-slate-500">Your pantry is empty. Add what you have, for example “6 eggs, 500 g rice”.</p>
+            <form id="pantry-form" class="mt-3 flex gap-2">
+                <input id="pantry-input" type="text" maxlength="80" autocomplete="off" placeholder="Add items, e.g. 6 eggs"
+                       class="flex-1 bg-slate-900 border border-slate-600 rounded-full px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400">
+                <button type="submit" class="bg-slate-700 hover:bg-slate-600 text-cyan-300 px-4 rounded-full text-sm">Add</button>
+            </form>
+            <div class="mt-2 flex items-center justify-between">
+                <p id="pantry-msg" class="text-xs text-slate-400" role="status"></p>
+                <button id="pantry-sample" type="button" class="text-xs text-slate-500 hover:text-slate-300 underline">Add sample items</button>
+            </div>
+        </details>
 
         <div id="tool-badge" class="hidden">
             <span class="inline-block bg-slate-800 text-cyan-300 text-xs px-3 py-1 rounded-full border border-cyan-500/30">

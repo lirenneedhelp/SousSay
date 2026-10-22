@@ -19,10 +19,13 @@ def test_search_ranks_by_ingredient_coverage():
     assert "note" not in r
 
 
-def test_search_uses_inventory_when_no_ingredients_given():
+def test_search_uses_the_users_pantry_when_no_ingredients_given():
+    import pantry
+    assert "empty" in cooking.search_recipes(SID)["note"]
+    pantry.update_pantry("add", ["2 chicken breast", "1 lemon", "500 g rice", "200 ml soy sauce", "30 g ginger"])
     r = cooking.search_recipes(SID)
     assert r["used_inventory"] is True
-    assert r["results"][0]["id"] == "lemon-soy-chicken"
+    assert r["results"][0]["id"] == "lemon-soy-chicken" and r["results"][0]["short"] == []
 
 
 def test_search_accepts_comma_string_and_plurals():
@@ -255,3 +258,30 @@ def test_history_starts_with_user_and_is_bounded():
 def test_generated_recipe_allows_until_no_longer_pink():
     ok = {**GOOD, "steps": [GOOD["steps"][0], "Cook the chicken until no longer pink, to 165°F (74°C).", "Serve with garlic."]}
     assert cooking.create_recipe(SID, **ok)["status"] == "created"
+
+
+@pytest.mark.parametrize("phrase,expected", [
+    ("set a 8 minute timer for eggs", ("eggs", 480)),
+    ("Set an 8 minute timer for the eggs please", ("eggs", 480)),
+    ("set a timer for 15 minutes for rice", ("rice", 900)),
+    ("start a timer for rice for 15 minutes", ("rice", 900)),
+    ("set a five minute timer for pasta", ("pasta", 300)),
+    ("set a twenty five minute timer for the roast", ("roast", 1500)),
+    ("set a 90 second timer", ("kitchen", 90)),
+    ("set a 1 hour 30 minute timer for the stew", ("stew", 5400)),
+    ("set a timer for an hour and a half for the roast", ("roast", 5400)),
+    ("set a timer for half an hour called soup", ("soup", 1800)),
+    ("set a 20 minute timer for Thai beef curry", ("thai beef curry", 1200)),
+    ("can you set an 8-minute timer for eggs?", ("eggs", 480)),
+])
+def test_plain_timer_requests_are_parsed(phrase, expected):
+    assert cooking.parse_set_timer(phrase) == expected
+
+
+@pytest.mark.parametrize("phrase", [
+    "set a timer", "set timers for rice and chicken", "set a 5 minute timer for eggs and a 10 minute timer for rice",
+    "cancel the 8 minute timer", "how long left on the 8 minute timer", "what timer should I set for 8 minutes",
+    "8 minutes for the eggs", "how long should I set the timer", "tell me about timers",
+])
+def test_ambiguous_or_other_requests_are_left_to_the_model(phrase):
+    assert cooking.parse_set_timer(phrase) is None
