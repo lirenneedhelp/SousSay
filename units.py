@@ -258,3 +258,24 @@ def format_item(label: str, amount: float | None, unit: str | None, system: str 
         base = re.sub(r"^canned\s+", "", label)
         return f"{n} {unit}{'s' if amount != 1 else ''} of {base}"
     return f"{format_amount(amount, unit, system)} {label}"
+
+
+# ---------------------------------------------------- "switch to US units" phrases
+_UNITS_VERB = re.compile(r"\b(switch|change|set|use|show|convert|go|make|put)\b", re.I)
+_UNITS_CONTEXT = re.compile(r"\b(units?|measurements?|measuring|metric|imperial|customary|system)\b", re.I)
+_UNITS_QUESTION = re.compile(r"\b(what|which|how|why|when|where)\b", re.I)
+_METRIC_WORD = r"metric|grams?|millilit\w+|kilograms?"
+_US_WORD = (r"u\.?s\.?(?=\s*(?:units?|measurements?|customary|system|standard)\b|\s*[.!]?$)|american|imperial|customary"
+            r"|cups?|ounces?|pounds?|fahrenheit")
+
+
+def parse_units_command(text: str) -> str | None:
+    """'switch to US units', 'change the measurements from metric to US', 'use metric' -> 'us' | 'metric'.
+    The last system mentioned wins. Questions, and anything with numbers ('use 2 cups of rice'), are not commands."""
+    t = text.strip()
+    if (not _UNITS_VERB.search(t) or not _UNITS_CONTEXT.search(t) or _UNITS_QUESTION.search(t) or re.search(r"\d", t)):
+        return None
+    last = None
+    for m in re.finditer(rf"(?P<metric>\b(?:{_METRIC_WORD})\b)|(?P<us>\b(?:{_US_WORD})(?!\w))", t, re.I):
+        last = "metric" if m.group("metric") else "us"
+    return last

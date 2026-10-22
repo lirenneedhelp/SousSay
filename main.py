@@ -23,6 +23,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 import cooking
 import db
 import pantry
+import units
 from cooking import CookingError, SessionNotFound
 from mcp_tools import mcp
 from security import (COOKIE_NAME, BodyLimitMiddleware, McpAuthMiddleware, RateLimiter, SecurityHeadersMiddleware,
@@ -46,6 +47,7 @@ bedrock = boto3.client(
     region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
     config=Config(connect_timeout=5, read_timeout=30, retries={"max_attempts": 2, "mode": "standard"}),
 )
+
 
 # Self-hosted MCP server (Streamable HTTP) mounted at /mcp/. The chat endpoint below talks to the
 # SAME server through an in-memory client, so there is no HTTP hop to ourselves (no deadlock).
@@ -101,7 +103,7 @@ Workflow:
 
 Timers: never say you set, started, cancelled, or have a timer unless a tool result in this turn confirmed it or the state block lists it. Earlier conversation messages may be wrong about timers; the state block is the truth. To start a timer you must call set_timer; to cancel one you must call cancel_timer.
 
-Units: follow the Unit system in the state block (metric: grams, ml, °C; US: cups, oz, °F). Tool results give both temperatures; quote the one that matches.
+Units: you cannot change the unit system (the app does that when the user says "switch to US units" or "use metric"). Never say you changed it. Follow the Unit system in the state block (metric: grams, ml, °C; US: cups, oz, °F). Tool results give both temperatures; quote the one that matches.
 
 Food safety: for any doneness, temperature, or storage question call food_safety_lookup instead of guessing. Never suggest undercooked poultry or ground meat, or leaving perishable food out more than 2 hours. If a tool returns an error, say so briefly in plain words and do not make up a result. If unsure, say so and suggest checking USDA guidance."""
 
@@ -259,6 +261,9 @@ _PANTRY_CLAIM = re.compile(r"\b(i['’]?ve|i have|i)\s+(added|removed|updated|su
                            r"|\b(pantry|inventory)\b[^.?!]{0,40}\b(is|has been|was)\s+(now\s+)?(updated|changed)\b", re.I)
 
 
+_UNITS_CLAIM = re.compile(r"\b(i['’]?ve|i have|i|just|already)\s+(switched|changed|set|converted)\b[^.?!]{0,60}\b(metric|us|imperial|units|measurements|customary)\b"
+                          r"|\b(units|measurements)\b[^.?!]{0,40}\b(are|have been|were)\s+(now\s+)?(switched|changed|set)\b"
+                          r"|\b(switching|changing)\s+(to|the)\b[^.?!]{0,40}\b(metric|us|imperial|units|measurements)\b", re.I)
 _STEP_TALK = re.compile(r"\b(next step|first step|current step|step \d+|let'?s (?:start|begin) cooking|preheat)\b", re.I)
 
 
@@ -280,6 +285,9 @@ def guard_unbacked_claims(reply: str, ok_tools: set[str]) -> str:
     if _SET_CLAIM.search(reply) and "set_timer" not in ok_tools:
         log.warning("Replaced an unbacked 'timer set' claim")
         return "I couldn't start that timer. Please say it again with a name and a length, like: set a 15 minute timer for rice."
+    if _UNITS_CLAIM.search(reply):  # no tool changes units; only the app's own handling does
+        log.warning("Replaced an unbacked unit-change claim")
+        return "I couldn't change the units. Say \"switch to US units\" or \"use metric\", or use the selector in the Pantry panel."
     if _PANTRY_CLAIM.search(reply) and not ({"update_pantry", "pantry_deduction"} & ok_tools):
         log.warning("Replaced an unbacked pantry claim")
         return "I couldn't change your pantry. Try saying: add 6 eggs to my pantry."
@@ -346,6 +354,12 @@ def app_shortcut(session_id: str, text: str) -> str | None:
                 label, seconds = offer
                 cooking.set_timer(session_id, label, seconds=seconds)
                 return f"Okay, {label} timer set for {cooking.spoken_duration(seconds)}."
+        system = units.parse_units_command(text)
+        if system:
+            before = pantry.get_units()
+            pantry.set_units(system)
+            name = "US units (cups, ounces, °F)" if system == "us" else "metric (grams, millilitres, °C)"
+            return f"They're already shown in {name}." if before == system else f"Okay, amounts are now shown in {name}."
         nav = cooking.parse_navigation(text)
         if nav:
             if cooking.session_view(session_id)["status"] == "idle":
@@ -620,3 +634,6 @@ def pantry_deduct(req: DeductionDecision, principal: str = Depends(require_user)
             return actions[req.decision](req.session_id)
     except Exception as exc:
         raise to_http_error(exc)
+
+
+# ----------------------------------------------------------------- spoken replies
