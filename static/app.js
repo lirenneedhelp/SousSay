@@ -389,15 +389,18 @@ async function loadPantry() {
     try {
         const res = await fetch('/api/pantry');
         if (res.status === 401) { showLogin('Please enter the access code.'); return; }
-        if (!res.ok) return;
+        if (!res.ok) { setPantryMessage('Could not load your pantry.'); return; }
         let data = await res.json();
         if (!data.units_set) {  // first visit: match the units of the user's country, changeable below
             const set = await pantryRequest('/api/preferences', {units: detectUnits()});
             if (set) data = await (await fetch('/api/pantry')).json();
         }
         renderPantry(data);
-    } catch (e) { /* offline: keep what is shown */ }
-    finally {
+        setPantryMessage('');
+    } catch (e) {
+        console.error('Pantry load failed:', e);  // visible in the browser console for diagnosis
+        setPantryMessage('Could not load your pantry.');
+    } finally {
         pantryLoading = false;
         if (pantryDirty) { pantryDirty = false; loadPantry(); }
     }

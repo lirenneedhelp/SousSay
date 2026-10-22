@@ -71,7 +71,17 @@ app.add_middleware(BodyLimitMiddleware, get_settings=lambda: settings)
 app.add_middleware(SecurityHeadersMiddleware, get_settings=lambda: settings)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 (BASE_DIR / "static").mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+class RevalidatingStatic(StaticFiles):
+    """Browsers must re-check the page's script and CSS on every load (cheap: they get 304 when unchanged),
+    so a redeploy is never hidden behind a stale cached copy."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", RevalidatingStatic(directory=BASE_DIR / "static"), name="static")
 
 SYSTEM_PROMPT = """You are Talk Sous, a hands-free voice sous-chef on an Alexa+ kitchen display.
 
