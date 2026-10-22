@@ -259,6 +259,18 @@ _PANTRY_CLAIM = re.compile(r"\b(i['’]?ve|i have|i)\s+(added|removed|updated|su
                            r"|\b(pantry|inventory)\b[^.?!]{0,40}\b(is|has been|was)\s+(now\s+)?(updated|changed)\b", re.I)
 
 
+_STEP_TALK = re.compile(r"\b(next step|first step|current step|step \d+)\b", re.I)
+
+
+def guard_invented_steps(reply: str, ok_tools: set[str], recipe_active: bool) -> str:
+    """With no active recipe the model has no steps to read. If it narrates some anyway, they are invented."""
+    if (not recipe_active and "?" not in reply and _STEP_TALK.search(reply)
+            and not ({"start_recipe", "next_step", "get_current_step", "previous_step"} & ok_tools)):
+        log.warning("Replaced invented recipe steps")
+        return "We haven't started a recipe yet. Tell me which one you'd like to cook, or ask what you can make."
+    return reply
+
+
 def guard_unbacked_claims(reply: str, ok_tools: set[str]) -> str:
     """The model sometimes says it did something it never did. If it claims to have set or cancelled a timer
     without a successful tool call this turn, replace the claim with an honest message."""
@@ -283,6 +295,34 @@ def clean_spoken_text(raw: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def step_sentence(session_id: str, step: dict) -> str:
+    said = f"Step {step['step_number']} of {step['total_steps']}: {step['instruction']}"
+    if step.get("adaptations"):
+        said += " (" + "; ".join(step["adaptations"]).capitalize() + ".)"
+    if step.get("note"):
+        said += " " + step["note"]
+    hint = step.get("timer_hint")
+    if hint and not any(timer_label_match(t["label"], hint["label"]) and t["status"] == "running"
+                        for t in cooking.list_timers(session_id)["timers"]):
+        said += f" Want me to set a timer for {cooking.spoken_duration(hint['duration_s'])} called {hint['label']}?"
+    return said
+
+
+def timer_label_match(a: str, b: str) -> bool:
+    return cooking._tokens_match(a, b)
+
+
+def start_sentence(session_id: str, r: dict) -> str:
+    n = r["servings"]
+    kind = "the AI-generated recipe " if r["ai_generated"] else ""
+    said = f"Starting {kind}{r['title']} for {n} serving{'s' if n != 1 else ''}."
+    if r["safety_notes"]:
+        said += " Safety: " + r["safety_notes"][0]
+    if r["short_in_pantry"]:
+        said += " You're short on " + pantry._join([s["item"] for s in r["short_in_pantry"]]) + "."
+    return said + " " + step_sentence(session_id, r["current_step"])
+
+
 def app_shortcut(session_id: str, text: str) -> str | None:
     """Plain pantry, servings and yes/no answers are handled by the app, so they never depend on the model."""
     try:
@@ -301,6 +341,24 @@ def app_shortcut(session_id: str, text: str) -> str | None:
             if decision == "undo":
                 r = pantry.undo_deduction(session_id)
                 return "Okay, I put " + pantry._join(r["restored"]) + " back." if r["restored"] else "Okay, nothing to put back."
+            if pantry.is_yes(text) and (offer := cooking.pending_timer_offer(session_id)):
+                label, seconds = offer
+                cooking.set_timer(session_id, label, seconds=seconds)
+                return f"Okay, {label} timer set for {cooking.spoken_duration(seconds)}."
+        nav = cooking.parse_navigation(text)
+        if nav:
+            if cooking.session_view(session_id)["status"] == "idle":
+                return "We haven't started a recipe yet. Tell me what you'd like to cook, or ask what you can make."
+            r = {"next": cooking.next_step, "repeat": cooking.get_current_step, "previous": cooking.previous_step}[nav](session_id)
+            if r.get("status") == "completed":
+                said = "That was the last step. Enjoy!"
+                if pantry.deduction_status(session_id)["state"] == "pending":
+                    said += " Want me to subtract the ingredients from your pantry?"
+                return said
+            return step_sentence(session_id, r)
+        choice = cooking.match_recipe_in_text(session_id, text)
+        if choice:
+            return start_sentence(session_id, cooking.start_recipe(session_id, choice[0], choice[1]))
         servings = cooking.parse_servings_command(text)
         if servings and cooking.session_view(session_id)["status"] == "cooking":
             r = cooking.set_servings(session_id, servings)
@@ -371,6 +429,7 @@ async def run_turn(session_id: str, user_text: str) -> tuple[str, list[str]]:
             messages.append({"role": "user", "content": results})
 
     reply = guard_unbacked_claims(reply, ok_tools)
+    reply = guard_invented_steps(reply, ok_tools, cooking.session_view(session_id)["status"] != "idle")
     if status_before != "completed" and cooking.session_view(session_id)["status"] == "completed" \
             and pantry.deduction_status(session_id)["state"] == "pending":
         reply += " Want me to subtract the ingredients from your pantry?"

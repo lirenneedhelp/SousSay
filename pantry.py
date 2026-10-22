@@ -392,6 +392,10 @@ _NO = re.compile(r"^(?:no|nope|nah|skip(?: it)?|don'?t|leave it|not now|no thank
 _UNDO = re.compile(r"^(?:undo(?: that| it)?|put (?:them|it) back|revert(?: that)?|restore(?: them| it)?)\s*[.!]?$", re.I)
 
 
+def is_yes(text: str) -> bool:
+    return bool(_YES.match(text.strip()))
+
+
 def parse_deduction_reply(text: str, state: str | None) -> str | None:
     """Short answers to the app's question. Only meaningful while a decision is pending (or to undo an applied one)."""
     t = text.strip()

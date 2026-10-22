@@ -602,6 +602,64 @@ def parse_set_timer(text: str) -> tuple[str, int] | None:
     return (label if label and label != "timer" else "kitchen"), seconds
 
 
+_NEXT = re.compile(r"^(?:ok(?:ay)?[, ]+)?(?:next(?: step)?|go to the next step|continue|move on|keep going|i'?m done|i am done|done|ready|finished|what'?s next|and then)\s*[.!?]?$", re.I)
+_REPEAT = re.compile(r"^(?:ok(?:ay)?[, ]+)?(?:repeat(?: that| it| the step)?|say that again|what(?:'s| is) the (?:current )?step|current step|again|what was that|read (?:that|it) again)\s*[.!?]?$", re.I)
+_PREVIOUS = re.compile(r"^(?:ok(?:ay)?[, ]+)?(?:go back|previous(?: step)?|back|last step|one step back|go to the previous step)\s*[.!?]?$", re.I)
+
+
+def parse_navigation(text: str) -> str | None:
+    """Short, unambiguous step-navigation phrases only. -> 'next' | 'repeat' | 'previous' | None."""
+    t = text.strip()
+    return "next" if _NEXT.match(t) else "repeat" if _REPEAT.match(t) else "previous" if _PREVIOUS.match(t) else None
+
+
+_CHOOSE_VERB = re.compile(r"\b(let'?s|lets|i'?ll|i will|i'?d like|i would like|i want|we'?ll|we will|can we|could we|start|begin|make|cook|do|go with|pick|choose|try)\b", re.I)
+_CHOOSE_BLOCK = re.compile(r"\?|\b(how|what|why|when|which|where|ingredients|or)\b", re.I)
+_FOR_SERVINGS = re.compile(r"\bfor\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b(?:\s+(?:people|persons|servings|portions))?", re.I)
+
+
+def match_recipe_in_text(session_id: str, text: str) -> tuple[str, int | None] | None:
+    """'let's make the lemon soy chicken for 4' -> (recipe id, 4). Only when exactly one recipe is named."""
+    if _CHOOSE_BLOCK.search(text) or not _CHOOSE_VERB.search(text):
+        return None
+    words = set(_norm(text).split())
+    with connect() as conn:
+        pool = {**_recipes(), **_generated(conn, session_id)}
+    hits = []
+    for rec in pool.values():
+        for key in (set(_norm(rec["id"]).split()), set(_norm(re.split(r"\bwith\b", rec["title"], flags=re.I)[0]).split())):
+            if key and key <= words:
+                hits.append((len(key), rec["id"]))
+                break
+    if not hits:
+        return None
+    best = max(n for n, _ in hits)
+    winners = {rid for n, rid in hits if n == best}
+    if len(winners) != 1:
+        return None
+    m = _FOR_SERVINGS.search(text)
+    n = units.parse_number(m[1]) if m else None
+    return winners.pop(), (int(n) if n else None)
+
+
+_TIMER_OFFER = re.compile(r"Want me to set a timer for (.+?) called (.+?)\?\s*$")
+
+
+def pending_timer_offer(session_id: str) -> tuple[str, int] | None:
+    """If the app's last message offered the current step's timer and it isn't running yet, returns (label, seconds)."""
+    history = load_history(session_id, limit=2)
+    if not history or history[-1]["role"] != "assistant":
+        return None
+    m = _TIMER_OFFER.search(history[-1]["content"][0]["text"])
+    step = session_view(session_id)["step"]
+    hint = (step or {}).get("timer_hint")
+    if not m or not hint or m[2] != hint["label"]:
+        return None
+    if any(_tokens_match(t["label"], hint["label"]) and t["status"] == "running" for t in list_timers(session_id)["timers"]):
+        return None
+    return hint["label"], int(hint["duration_s"])
+
+
 def describe_timers(session_id: str) -> str:
     """Answers "what timers do I have / how long is left" from the database, never from the model."""
     timers = list_timers(session_id)["timers"]

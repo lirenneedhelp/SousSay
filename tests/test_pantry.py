@@ -418,7 +418,7 @@ def test_finishing_a_recipe_asks_and_the_answer_is_handled_by_the_app(client, mo
     for _ in range(4):
         cooking.next_step(SID)
     spy(monkeypatch, [tools(("next_step", {})), text("Enjoy your meal!")])
-    r = chat(client, "next").json()
+    r = chat(client, "please go ahead and move to the following step").json()   # not a plain "next": the model path
     assert r["response"] == "Enjoy your meal! Want me to subtract the ingredients from your pantry?"
     assert r["state"]["pantry_deduction"]["state"] == "pending" and "2 chicken breasts" in r["state"]["pantry_deduction"]["used"]
 

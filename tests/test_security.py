@@ -599,3 +599,12 @@ def test_mcp_pantry_is_private_to_the_mcp_principal(live_server):
         assert pantry.list_pantry()["items"] == []  # a browser user never sees the MCP client's pantry
         pantry.update_pantry("add", ["2 lemons"])
     assert "lemon" not in mcp_call(live_server, "get_pantry", {"session_id": "mcp-pantry-0001"})[1]
+
+
+def test_static_assets_are_revalidated_so_a_redeploy_is_never_hidden_by_a_stale_cache():
+    c = make_client(None)
+    for path in ("/static/app.js", "/static/app.css", "/"):
+        r = c.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+    etag = c.get("/static/app.js").headers["etag"]
+    assert c.get("/static/app.js", headers={"If-None-Match": etag}).status_code == 304  # cheap when unchanged

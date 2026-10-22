@@ -34,7 +34,7 @@ def test_plain_text_turn_strips_thinking_and_persists_history(client, monkeypatc
     fake = use_bedrock(monkeypatch, [text("<thinking>plan</thinking>Hi chef!"), text("Still here.")])
     r = chat(client, "hey")
     assert r.status_code == 200 and r.json()["response"] == "Hi chef!" and r.json()["tool_called"] is None
-    chat(client, "again?")
+    chat(client, "still there?")
     second = fake.calls[1]
     assert [m["role"] for m in second["messages"]] == ["user", "assistant", "user"]  # history carried over
     assert "CURRENT KITCHEN STATE" in second["system"][0]["text"]
@@ -42,7 +42,7 @@ def test_plain_text_turn_strips_thinking_and_persists_history(client, monkeypatc
 
 def test_tool_call_runs_through_mcp_and_updates_state(client, monkeypatch):
     use_bedrock(monkeypatch, [tools(("start_recipe", {"recipe": "lemon soy chicken"})), text("Starting. Mix the marinade.")])
-    r = chat(client, "let's make the lemon soy chicken").json()
+    r = chat(client, "I fancy the lemon soy chicken tonight").json()
     assert r["tool_called"] == "start_recipe" and r["tools_called"] == ["start_recipe"]
     assert r["state"]["session"]["recipe"]["id"] == "lemon-soy-chicken"
     assert r["state"]["session"]["step"]["step_number"] == 1
@@ -50,7 +50,7 @@ def test_tool_call_runs_through_mcp_and_updates_state(client, monkeypatch):
 
 def test_state_is_injected_into_next_turn_prompt(client, monkeypatch):
     fake = use_bedrock(monkeypatch, [tools(("start_recipe", {"recipe": "shakshuka"})), text("ok"), text("ok")])
-    chat(client, "start shakshuka")
+    chat(client, "I fancy the shakshuka tonight")
     chat(client, "what step am I on?")
     assert "Step 1 of 4" in fake.calls[2]["system"][0]["text"]
 
