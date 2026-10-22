@@ -259,15 +259,16 @@ _PANTRY_CLAIM = re.compile(r"\b(i['’]?ve|i have|i)\s+(added|removed|updated|su
                            r"|\b(pantry|inventory)\b[^.?!]{0,40}\b(is|has been|was)\s+(now\s+)?(updated|changed)\b", re.I)
 
 
-_STEP_TALK = re.compile(r"\b(next step|first step|current step|step \d+)\b", re.I)
+_STEP_TALK = re.compile(r"\b(next step|first step|current step|step \d+|let'?s (?:start|begin) cooking|preheat)\b", re.I)
 
 
 def guard_invented_steps(reply: str, ok_tools: set[str], recipe_active: bool) -> str:
-    """With no active recipe the model has no steps to read. If it narrates some anyway, they are invented."""
-    if (not recipe_active and "?" not in reply and _STEP_TALK.search(reply)
+    """With no active recipe the model has no steps to read. If it narrates some anyway, they are invented
+    (even when it ends with a question such as "Want a timer?")."""
+    if (not recipe_active and _STEP_TALK.search(reply)
             and not ({"start_recipe", "next_step", "get_current_step", "previous_step"} & ok_tools)):
         log.warning("Replaced invented recipe steps")
-        return "We haven't started a recipe yet. Tell me which one you'd like to cook, or ask what you can make."
+        return "I haven't started a recipe yet. Say, for example, \"let's make the lemon soy chicken\", or ask what you can cook."
     return reply
 
 
