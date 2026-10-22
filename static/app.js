@@ -76,9 +76,63 @@ function speakText(text, queue = false) {
     if (!window.speechSynthesis) return;
     if (!queue) window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
+    const voice = chosenVoice();
+    if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     window.speechSynthesis.speak(utterance);
+}
+
+// ---- Voice: the browser's own speech voices. Browsers do not report gender, so voices are ranked by known
+// female voice names (and "Natural"/"Online" neural voices, which sound best). The user can pick another.
+const VOICE_KEY = 'talksous.voice';
+const FEMALE_RE = /zira|aria|jenny|samantha|karen|moira|tessa|fiona|victoria|susan|hazel|libby|sonia|emma|ava|allison|joanna|salli|ivy|kendra|kimberly|michelle|natasha|catherine|heather|linda|sara|serena|female|google us english|google uk english female/i;
+const MALE_RE = /\b(david|mark|george|daniel|alex|fred|richard|james|guy|ryan|brian|thomas|rishi|oliver|male)\b/i;
+
+function voiceScore(v) {
+    let score = 0;
+    if (FEMALE_RE.test(v.name)) score += 5;
+    if (MALE_RE.test(v.name)) score -= 8;
+    if (/natural|neural|online/i.test(v.name)) score += 3;
+    const lang = (navigator.language || 'en-US').toLowerCase(), vl = v.lang.toLowerCase();
+    if (vl === lang) score += 2; else if (vl.startsWith(lang.split('-')[0])) score += 1;
+    return score;
+}
+
+function englishVoices() {
+    if (!window.speechSynthesis) return [];
+    return window.speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang)).sort((a, b) => voiceScore(b) - voiceScore(a));
+}
+
+function savedVoiceId() {
+    try { return localStorage.getItem(VOICE_KEY) || ''; } catch (e) { return ''; }
+}
+
+function chosenVoice() {
+    const voices = englishVoices();
+    if (!voices.length) return null;
+    const saved = savedVoiceId();
+    return (saved && voices.find((v) => v.voiceURI === saved)) || voices[0];  // no saved choice: best female voice
+}
+
+function populateVoices() {
+    const select = $('voice-select');
+    const voices = englishVoices();
+    select.classList.toggle('hidden', voices.length === 0);
+    if (!voices.length) return;
+    const options = [new Option('Auto (best female voice)', '')];
+    voices.forEach((v) => options.push(new Option(v.name.replace(/^(Microsoft|Google)\s+/, ''), v.voiceURI)));
+    select.replaceChildren(...options);
+    select.value = voices.some((v) => v.voiceURI === savedVoiceId()) ? savedVoiceId() : '';
+}
+
+$('voice-select').addEventListener('change', () => {
+    try { localStorage.setItem(VOICE_KEY, $('voice-select').value); } catch (e) { /* ignore */ }
+    speakText("Hi, I'm your sous chef.");  // preview the new voice
+});
+if (window.speechSynthesis) {
+    populateVoices();
+    window.speechSynthesis.onvoiceschanged = populateVoices;  // browsers load their voice list asynchronously
 }
 
 function beep() {
